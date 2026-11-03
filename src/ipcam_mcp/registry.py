@@ -49,17 +49,27 @@ class Registry:
         self._media_dir = config.media_dir
 
     async def close_retired(self) -> None:
-        """Close adapters dropped by ``reload``, each once its in-flight call has finished."""
+        """Close adapters dropped by ``reload``, each once its in-flight call has finished.
+
+        If cancelled, the adapters not closed yet (including the one being closed; closing
+        twice is harmless) go back to the queue for the next call.
+        """
         retired, self._retired = self._retired, []
-        for dev_id, adapter in retired:
-            aclose = getattr(adapter, "aclose", None)
-            if aclose is None:
-                continue
-            async with self.lock(dev_id):
-                try:
-                    await aclose()
-                except Exception as e:  # noqa: BLE001 — best effort cleanup
-                    log.warning("%s: closing old connection failed (%s)", dev_id, type(e).__name__)
+        done = 0
+        try:
+            for dev_id, adapter in retired:
+                aclose = getattr(adapter, "aclose", None)
+                if aclose is not None:
+                    async with self.lock(dev_id):
+                        try:
+                            await aclose()
+                        except Exception as e:  # noqa: BLE001 — best effort cleanup
+                            log.warning(
+                                "%s: closing old connection failed (%s)", dev_id, type(e).__name__
+                            )
+                done += 1
+        finally:
+            self._retired[:0] = retired[done:]
 
     @property
     def media_dir(self) -> Path:
