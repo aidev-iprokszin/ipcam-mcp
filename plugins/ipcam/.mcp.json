@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ipcam": {
+      "command": "uvx",
+      "args": ["ipcam-mcp==0.3.2"]
+    }
+  }
+}

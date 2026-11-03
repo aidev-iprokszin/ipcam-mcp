@@ -1,0 +1,15 @@
+{
+  "name": "ipcam-mcp",
+  "owner": {
+    "name": "aidev-iprokszin",
+    "url": "https://github.com/aidev-iprokszin"
+  },
+  "description": "The ipcam-mcp plugin for Claude Code",
+  "plugins": [
+    {
+      "name": "ipcam",
+      "source": "./plugins/ipcam",
+      "description": "See through and control the IP cameras on your local network (ONVIF/RTSP)"
+    }
+  ]
+}
