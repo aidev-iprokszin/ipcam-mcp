@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
-from conftest import uid_for
+from conftest import FakeCamPTZ, uid_for
 
 from ipcam_mcp.adapters.onvif import OnvifPtzCamera
 from ipcam_mcp.config import AppConfig, DeviceConfig
@@ -49,7 +49,9 @@ def test_unknown_type_raises():
 def test_list():
     reg = Registry(app(dev("cam")), adapters={"fake": FakeCamera})
     listed = reg.list()
-    assert listed == [{"id": "cam", "type": "fake", "capabilities": ["camera"]}]
+    assert listed == [
+        {"id": "cam", "uid": uid_for("cam"), "type": "fake", "capabilities": ["camera"]}
+    ]
     assert "10.0.0.9" not in repr(listed)
     assert "pw" not in repr(listed)
 
@@ -189,3 +191,15 @@ async def test_close_retired_ignores_adapters_without_aclose_and_errors():
     reg2 = Registry(app(dev("b")), adapters={"fake": FakeCamera})
     reg2.reload(app())
     await reg2.close_retired()
+
+
+def test_folder(tmp_path):
+    reg = Registry(AppConfig(tmp_path, {"lr": dev("lr")}), adapters={"fake": FakeCamPTZ})
+    assert reg.folder("lr") == tmp_path / uid_for("lr")
+    assert (tmp_path / uid_for("lr") / "camera.json").exists()
+
+
+def test_folder_unknown_camera(tmp_path):
+    reg = Registry(AppConfig(tmp_path, {}))
+    with pytest.raises(DeviceError, match="camera 'nope' not found"):
+        reg.folder("nope")

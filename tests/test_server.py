@@ -51,7 +51,34 @@ async def test_list_cameras(registry):
     r = await call(registry, "list_cameras")
     assert not r.is_error
     data = json.loads(text_of(r))
-    assert data == [{"id": "cam", "type": "fake", "capabilities": ["camera", "ptz"]}]
+    assert data == [
+        {"id": "cam", "uid": uid_for("cam"), "type": "fake", "capabilities": ["camera", "ptz"]}
+    ]
+
+
+async def test_snapshot_saved_in_uid_folder(registry, tmp_path):
+    r = await call(registry, "camera_snapshot", {"camera": "cam"})
+    folder = tmp_path / uid_for("cam")
+    assert str(folder / "cam_") in text_of(r)
+    assert json.loads((folder / "camera.json").read_text())["name"] == "cam"
+
+
+async def test_from_path_accepts_uid_folder_snapshot(registry, tmp_path):
+    r = await call(registry, "camera_snapshot", {"camera": "cam"})
+    path = text_of(r).split("Saved full-size snapshot: ")[1].strip()
+    r = await call(
+        registry, "camera_snapshot", {"camera": "cam", "from_path": path, "region": "center"}
+    )
+    assert not r.is_error, text_of(r)
+
+
+async def test_compare_finds_snapshot_taken_under_earlier_name(registry, tmp_path, monkeypatch):
+    folder = tmp_path / uid_for("cam")
+    folder.mkdir()
+    Image.new("RGB", (64, 48), (10, 10, 10)).save(folder / "oldname_20200101-000000.jpg", "JPEG")
+    fake_compare(monkeypatch)
+    t = text_of(await call(registry, "camera_compare", {"camera": "cam"}))
+    assert t.startswith("Compared with previous snapshot oldname_20200101-000000.jpg (")
 
 
 async def test_list_cameras_empty_hints_add_camera(managed, tmp_path):
@@ -78,13 +105,13 @@ async def test_snapshot_returns_image_and_path(registry, tmp_path):
     images = [c for c in r.content if c.type == "image"]
     assert len(images) == 1
     assert images[0].mime_type == "image/jpeg"
-    assert str(tmp_path / "cam_") in text_of(r)
+    assert str(tmp_path / uid_for("cam") / "cam_") in text_of(r)
     assert ".jpg" in text_of(r)
 
 
 async def test_snapshot_low_quality(registry, tmp_path):
     r = await call(registry, "camera_snapshot", {"camera": "cam", "quality": "low"})
-    assert str(tmp_path / "cam_") in text_of(r)
+    assert str(tmp_path / uid_for("cam") / "cam_") in text_of(r)
     assert registry._devices["cam"][1].snapshots == 1
 
 
@@ -99,7 +126,7 @@ async def test_snapshot_crop_region(registry, tmp_path):
     t = text_of(r)
     assert "cropped to [0.667, 0.000, 0.333, 0.333]" in t
     assert "(21\u00d716 px)" in t
-    assert str(tmp_path / "cam_") in t
+    assert str(tmp_path / uid_for("cam") / "cam_") in t
 
 
 async def test_snapshot_crop_and_region_refused(registry):
@@ -172,7 +199,7 @@ async def test_record_returns_path_and_size(registry, tmp_path):
     r = await call(registry, "camera_record", {"camera": "cam"})
     assert not r.is_error
     t = text_of(r)
-    assert str(tmp_path / "clip.mp4") in t
+    assert str(tmp_path / uid_for("cam") / "clip.mp4") in t
     assert "10s" in t
     assert "1234 bytes" in t
 
@@ -597,12 +624,12 @@ async def test_compare_reads_reference_before_capture(registry, tmp_path, monkey
     cam = registry.get("cam", "camera")
 
     async def snap(quality):
-        p = media_path(tmp_path, "cam", "jpg")
+        p = media_path(registry.folder("cam"), "cam", "jpg")
         p.write_bytes(b"NEW")
         return p
 
     monkeypatch.setattr(cam, "snapshot", snap)
-    media_path(tmp_path, "cam", "jpg").write_bytes(b"OLD")
+    media_path(registry.folder("cam"), "cam", "jpg").write_bytes(b"OLD")
     seen = fake_compare(monkeypatch)
     r = await call(registry, "camera_compare", {"camera": "cam"})
     assert not r.is_error, text_of(r)
@@ -611,7 +638,9 @@ async def test_compare_reads_reference_before_capture(registry, tmp_path, monkey
 
 
 def prime(tmp_path):
-    Image.new("RGB", (64, 48), (10, 10, 10)).save(tmp_path / "cam_20200101-000000.jpg", "JPEG")
+    folder = tmp_path / uid_for("cam")
+    folder.mkdir(exist_ok=True)
+    Image.new("RGB", (64, 48), (10, 10, 10)).save(folder / "cam_20200101-000000.jpg", "JPEG")
 
 
 async def test_compare_text_change(registry, tmp_path, monkeypatch):
@@ -700,7 +729,7 @@ async def test_baseline_and_compare_tolerate_unreadable_position(registry, monke
     r = await call(registry, "camera_save_baseline", {"camera": "cam", "name": "door"})
     assert not r.is_error, text_of(r)
     assert "saved baseline 'door'" in text_of(r)
-    b = server_mod.baselines.load_baseline(registry.media_dir, "cam", "door")
+    b = server_mod.baselines.load_baseline(registry.folder("cam"), "door")
     assert b.position is None
 
     async def good():

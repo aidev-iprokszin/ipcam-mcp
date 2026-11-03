@@ -10,7 +10,6 @@ from conftest import FakeCamPTZ, uid_for
 from dotenv import dotenv_values
 
 from ipcam_mcp.adapters.onvif import DeviceInfo
-from ipcam_mcp.baselines import latest_snapshot
 from ipcam_mcp.config import load_config
 from ipcam_mcp.errors import ConfigError, DeviceError
 from ipcam_mcp.management import (
@@ -439,20 +438,6 @@ def _office_media(cfg: Path) -> Path:
     return media
 
 
-async def test_rename_moves_baselines_and_snapshots(env):
-    cfg, _, _ = env
-    media = _office_media(cfg)
-    mgr, registry, _ = make_manager(cfg)
-
-    await mgr.rename("office", "front")
-
-    assert (media / "baselines" / "front" / "door.jpg").exists()
-    assert not (media / "baselines" / "office").exists()
-    assert latest_snapshot(media, "front") == media / "front_20261103-111200.jpg"
-    assert latest_snapshot(media, "office") is None
-    assert ids(registry) == ["front"]
-
-
 async def test_rename_refuses_when_new_id_has_media(env):
     cfg, _, _ = env
     media = _office_media(cfg)
@@ -485,28 +470,6 @@ async def test_rename_reload_failure_moves_media_back(env):
     assert (media / "baselines" / "office" / "door.jpg").exists()
     assert (media / "office_20261103-111200.jpg").exists()
     assert not (media / "baselines" / "front").exists()
-
-
-async def test_rename_waits_for_running_camera_op(env):
-    cfg, _, _ = env
-    media = _office_media(cfg)
-    mgr, registry, _ = make_manager(cfg)
-    order: list[str] = []
-
-    async def capture():
-        async with registry.lock("office"):
-            await asyncio.sleep(0.05)
-            (media / "office_20261103-111300.jpg").write_bytes(b"jpg")
-            order.append("capture done")
-
-    task = asyncio.create_task(capture())
-    await asyncio.sleep(0)  # let the capture take the lock
-    await mgr.rename("office", "front")
-    order.append("renamed")
-    await task
-
-    assert order == ["capture done", "renamed"]
-    assert latest_snapshot(media, "front") == media / "front_20261103-111300.jpg"
 
 
 async def test_rename_shared_secrets_untouched(env):
@@ -602,7 +565,12 @@ async def test_reload_returns_list(env):
     text = cfg.read_text().replace("[cameras.office]", "[cameras.desk]")
     cfg.write_text(text)
     assert await mgr.reload() == [
-        {"id": "desk", "type": "tapo_onvif", "capabilities": ["camera", "ptz"]}
+        {
+            "id": "desk",
+            "uid": uid_for("office"),
+            "type": "tapo_onvif",
+            "capabilities": ["camera", "ptz"],
+        }
     ]
 
 

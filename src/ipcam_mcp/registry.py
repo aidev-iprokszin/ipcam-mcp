@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from ipcam_mcp import store
 from ipcam_mcp.adapters.onvif import make_camera
 from ipcam_mcp.capabilities import CAPABILITIES
 from ipcam_mcp.config import AppConfig, DeviceConfig
@@ -79,14 +80,23 @@ class Registry:
 
     def list(self) -> list[dict]:
         return [
-            {"id": dev_id, "type": dev.type, "capabilities": _capabilities(adapter)}
+            {"id": dev_id, "uid": dev.uid, "type": dev.type, "capabilities": _capabilities(adapter)}
             for dev_id, (dev, adapter) in self._devices.items()
         ]
 
-    def get(self, device_id: str, capability: str) -> Any:
+    def _require(self, device_id: str) -> tuple[DeviceConfig, object]:
         if device_id not in self._devices:
             available = ", ".join(self._devices) or "(none)"
             raise DeviceError(f"camera '{device_id}' not found; available: {available}")
+        return self._devices[device_id]
+
+    def folder(self, device_id: str) -> Path:
+        """The camera's media folder (``<media_dir>/<uid>/``), created if needed."""
+        dev, _ = self._require(device_id)
+        return store.ensure_folder(self._media_dir, dev.uid, device_id)
+
+    def get(self, device_id: str, capability: str) -> Any:
+        self._require(device_id)
         adapter = self._devices[device_id][1]
         if capability not in _capabilities(adapter):
             raise DeviceError(f"camera '{device_id}' does not support {capability}")

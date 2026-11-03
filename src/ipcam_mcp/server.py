@@ -221,7 +221,7 @@ def build_server(
                 baselines.check_name(name)
                 path = await adapter.snapshot(quality)
                 pos = await _position(adapter) if isinstance(adapter, PTZ) else None
-                baselines.save_baseline(registry.media_dir, camera, name, path, quality, pos)
+                baselines.save_baseline(registry.folder(camera), name, path, quality, pos)
                 data, _ = crop_jpeg(path, None)
                 return [
                     Image(data=data, format="jpeg"),
@@ -243,13 +243,13 @@ def build_server(
             async with registry.lock(camera):
                 base = None
                 if baseline is not None:
-                    base = baselines.load_baseline(registry.media_dir, camera, baseline)
+                    base = baselines.load_baseline(registry.folder(camera), baseline)
                     ref_path = base.path
                     label = f"baseline '{baseline}'"
                     age = datetime.now().astimezone() - base.taken
                     age_s = age.total_seconds()
                 else:
-                    ref_path = baselines.latest_snapshot(registry.media_dir, camera)
+                    ref_path = baselines.latest_snapshot(registry.folder(camera))
                     if ref_path is None:
                         raise ValueError(
                             f"no previous snapshot of '{camera}' to compare with; "
