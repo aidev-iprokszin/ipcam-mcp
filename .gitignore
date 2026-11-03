@@ -15,6 +15,3 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-
-# Local process notes (specs, plans), never published
-.superpowers/

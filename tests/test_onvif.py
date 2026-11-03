@@ -449,7 +449,7 @@ def test_tapo_ptz_false_override(tmp_path):
 
 
 async def test_stream_uri_lookup(tmp_path, ffmpeg_calls):
-    media = FakeMedia(uri="rtsp://admin:x@192.168.0.99:8554/live/ch0?a=1")
+    media = FakeMedia(uri="rtsp://admin:x@192.0.2.19:8554/live/ch0?a=1")
     cam = stream_cam(tmp_path, media)
     await cam.snapshot("high")
     assert await cam.rtsp_url("high") == "rtsp://u:p%40ss%3A%2F%23@10.0.0.5:8554/live/ch0?a=1"
