@@ -2,7 +2,7 @@
   "mcpServers": {
     "ipcam": {
       "command": "uvx",
-      "args": ["ipcam-mcp==0.3.2"]
+      "args": ["ipcam-mcp==0.4.0"]
     }
   }
 }
