@@ -1,4 +1,6 @@
+import errno
 from datetime import date
+from pathlib import Path
 
 from ipcam_mcp import migrate
 from ipcam_mcp.migrate import migrate_flat_layout
@@ -147,3 +149,31 @@ def test_unwritable_target_reports_instead_of_raising(tmp_path, monkeypatch):
     report = migrate_flat_layout(m, {"office": U})
     assert report.error is not None and "Permission denied" in report.error
     assert (m / "office_20261103-111200.jpg").exists()
+
+
+def test_corrupt_camera_json_is_set_aside(tmp_path):
+    m = tmp_path / "media"
+    office_flat(m)
+    put(m / U / "camera.json", b"{not json")
+    migrate_flat_layout(m, {"office": U})
+    backups = list((m / U).glob("camera.json.bad-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == b"{not json"
+    assert read_meta(m / U).name == "office"
+
+
+def test_meta_read_error_is_reported_and_file_kept(tmp_path, monkeypatch):
+    m = tmp_path / "media"
+    office_flat(m)
+    put(m / U / "camera.json", b"{}")
+    real = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self.name == "camera.json":
+            raise OSError(errno.EIO, "I/O error")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    report = migrate_flat_layout(m, {"office": U})
+    assert report.error is not None
+    assert (m / U / "camera.json").read_bytes() == b"{}"
+    assert not list((m / U).glob("camera.json.bad-*"))

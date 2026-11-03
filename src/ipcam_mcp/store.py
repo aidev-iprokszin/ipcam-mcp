@@ -94,19 +94,48 @@ def camera_dir(media_dir: Path, uid: str) -> Path:
     return media_dir / uid
 
 
+def parse_time(text: str) -> datetime:
+    """An ISO timestamp; one without a UTC offset (e.g. hand-edited) is local time."""
+    when = datetime.fromisoformat(text)
+    return when if when.tzinfo else when.astimezone()
+
+
+# A camera.json raising one of these is broken for good; other OSErrors may pass (EMFILE, EIO).
+_CORRUPT = (ValueError, KeyError, TypeError, AttributeError, IsADirectoryError)
+
+
+def _parse_meta(path: Path) -> CameraMeta:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    periods = tuple(_period(p) for p in raw.get("scenes") or ())
+    meta = CameraMeta(raw["uid"], raw["name"], parse_time(raw["created"]), periods)
+    if not (_UID_RE.fullmatch(meta.uid) and isinstance(meta.name, str)):
+        raise ValueError("bad uid or name")
+    return meta
+
+
 def read_meta(folder: Path) -> CameraMeta | None:
     path = folder / META
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        periods = tuple(_period(p) for p in raw.get("scenes") or ())
-        meta = CameraMeta(raw["uid"], raw["name"], datetime.fromisoformat(raw["created"]), periods)
-        if not (_UID_RE.fullmatch(meta.uid) and isinstance(meta.name, str)):
-            raise ValueError("bad uid or name")
-        return meta
+        return _parse_meta(path)
     except FileNotFoundError:
         return None
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+    except (OSError, *_CORRUPT) as e:
         log.warning("%s: unreadable (%s)", path, type(e).__name__)
+        return None
+
+
+def meta_for_update(folder: Path) -> CameraMeta | None:
+    """``camera.json`` read before writing it: None when there is none to keep. A corrupt one
+    is first renamed to ``camera.json.bad-<time>``; a read error (which may pass) raises, so a
+    good history is never replaced."""
+    path = folder / META
+    try:
+        return _parse_meta(path)
+    except FileNotFoundError:
+        return None
+    except _CORRUPT as e:
+        log.warning("%s: unreadable (%s)", path, type(e).__name__)
+        _set_aside(path)
         return None
 
 
@@ -116,7 +145,7 @@ def _period(raw: object) -> Period:
     continues = raw.get("continues")
     if continues is not None and not (isinstance(continues, str) and _UID_RE.fullmatch(continues)):
         raise ValueError("bad continues")
-    return Period(raw["scene"], datetime.fromisoformat(raw["since"]), continues)
+    return Period(raw["scene"], parse_time(raw["since"]), continues)
 
 
 def _period_json(p: Period) -> dict:
@@ -152,6 +181,16 @@ def _now() -> datetime:
     return datetime.now().astimezone().replace(microsecond=0)
 
 
+def _set_aside(path: Path) -> None:
+    stem = f"{path.name}.bad-{_now():%Y%m%d-%H%M%S}"
+    target, n = path.with_name(stem), 1
+    while target.exists() or target.is_symlink():
+        n += 1
+        target = path.with_name(f"{stem}-{n}")
+    os.replace(path, target)
+    log.warning("%s: unreadable, kept as %s; a new one is written", path, target.name)
+
+
 def ensure_folder(media_dir: Path, uid: str, name: str, scene: str | None = None) -> Path:
     """The camera's folder, created if needed, with ``camera.json`` naming it ``name``.
 
@@ -159,7 +198,7 @@ def ensure_folder(media_dir: Path, uid: str, name: str, scene: str | None = None
     is updated; scene changes go through ``enter_scene``.
     """
     folder = camera_dir(media_dir, uid)
-    meta = read_meta(folder)
+    meta = meta_for_update(folder)
     if meta is None:
         created = _now()
         write_meta(folder, CameraMeta(uid, name, created, (Period(scene or name, created),)))

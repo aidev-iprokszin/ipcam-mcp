@@ -326,9 +326,9 @@ class Manager:
                 lambda: config_writer.rename_section(self._config_path, old, new, updates), undo
             )
             # Media stay in the camera's uid folder; only its recorded name changes.
-            uid = config.devices[old].uid
-            if (config.media_dir / uid).is_dir():
-                store.ensure_folder(config.media_dir, uid, new)
+            dev = config.devices[old]
+            if (config.media_dir / dev.uid).is_dir():
+                store.ensure_folder(config.media_dir, dev.uid, new, dev.scene or old)
             if self._removed_named(config, new):
                 return (
                     f"renamed '{old}' to '{new}'; an earlier, removed camera named '{new}' "

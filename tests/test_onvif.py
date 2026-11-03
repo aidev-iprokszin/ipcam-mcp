@@ -10,6 +10,7 @@ from ipcam_mcp.adapters.onvif import OnvifCamera, OnvifPtzCamera, make_camera
 from ipcam_mcp.capabilities import PTZ, Camera, Preset
 from ipcam_mcp.config import DeviceConfig
 from ipcam_mcp.errors import ConfigError, DeviceError
+from ipcam_mcp.store import read_meta
 
 PASSWORD = "p@ss:/#"
 
@@ -814,3 +815,10 @@ async def test_failed_url_lookup_leaves_no_empty_file(tmp_path, kind):
     with pytest.raises(DeviceError):
         await (cam.snapshot("high") if kind == "snapshot" else cam.record(3, "high"))
     assert list(tmp_path.iterdir()) == []
+
+
+async def test_new_folder_starts_in_configured_scene(tmp_path, ffmpeg_calls):
+    cfg = dataclasses.replace(make_cfg(), scene="porch")
+    cam = make_camera(cfg, tmp_path, onvif_factory=lambda *a: None)
+    await cam.snapshot("high")
+    assert read_meta(tmp_path / "0livroom").current_scene == "porch"

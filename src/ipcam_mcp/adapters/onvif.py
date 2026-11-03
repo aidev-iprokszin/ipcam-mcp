@@ -253,7 +253,9 @@ class OnvifCamera:
         return f"{self._cfg.id} ({self._cfg.host}:{self._rtsp_port})"
 
     def _folder(self) -> Path:
-        return ensure_folder(self._media_dir, self._cfg.uid, self._cfg.id)
+        return ensure_folder(
+            self._media_dir, self._cfg.uid, self._cfg.id, self._cfg.scene or self._cfg.id
+        )
 
     async def snapshot(self, quality: Quality) -> Path:
         url = await self.rtsp_url(quality)  # before reserving: a failed lookup leaves no file

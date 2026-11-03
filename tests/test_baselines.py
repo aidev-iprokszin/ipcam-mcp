@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import pytest
 
@@ -63,3 +64,12 @@ def test_save_records_scene(tmp_path):
     assert saved.scene == "garage"
     assert load_baseline(tmp_path, "door").scene == "garage"
     assert json.loads((tmp_path / "baselines" / "door.json").read_text())["scene"] == "garage"
+
+
+def test_naive_taken_is_local(tmp_path):
+    save_baseline(tmp_path, "a", touch(tmp_path, "s.jpg"), "high", None)
+    meta_path = tmp_path / "baselines" / "a.json"
+    data = json.loads(meta_path.read_text())
+    data["taken"] = "2026-11-01T10:00:00"
+    meta_path.write_text(json.dumps(data))
+    assert load_baseline(tmp_path, "a").taken == datetime(2026, 11, 1, 10).astimezone()
