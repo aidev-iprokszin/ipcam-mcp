@@ -204,3 +204,8 @@ def test_parse_bound_date_and_datetime_and_invalid():
         ValueError, match="invalid date 'yesterday': use YYYY-MM-DD or an ISO datetime"
     ):
         parse_bound("yesterday", end=False)
+
+
+def test_parse_bound_compact_date_is_whole_day():
+    assert parse_bound("20261103", end=True) == parse_bound("2026-11-03", end=True)
+    assert parse_bound("20261103", end=False) == datetime(2026, 11, 3).astimezone()

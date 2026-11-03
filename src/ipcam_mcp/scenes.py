@@ -241,9 +241,12 @@ def parse_bound(text: str, *, end: bool) -> datetime:
     """An ISO date (the whole day: its start, or its end if ``end``) or datetime; naive
     values are local time."""
     try:
-        if len(text) == 10:
-            day = date.fromisoformat(text)
-            return datetime.combine(day, time.max if end else time.min).astimezone()
+        day = date.fromisoformat(text)  # also the compact YYYYMMDD
+    except ValueError:
+        pass
+    else:
+        return datetime.combine(day, time.max if end else time.min).astimezone()
+    try:
         when = datetime.fromisoformat(text)
     except ValueError:
         raise ValueError(f"invalid date '{text}': use YYYY-MM-DD or an ISO datetime") from None
