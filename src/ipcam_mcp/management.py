@@ -26,6 +26,7 @@ from ipcam_mcp.adapters.onvif import DeviceInfo
 from ipcam_mcp.config import NAME_PATTERN, AppConfig, load_config, media_dir_of
 from ipcam_mcp.errors import ConfigError
 from ipcam_mcp.registry import Registry
+from ipcam_mcp.tooling import os_error_text
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +83,14 @@ def validate_host(host: str) -> None:
 
 
 def prepare_config(path: Path) -> AppConfig:
+    """``load_with_uids``, then record hand-made scene changes (``sync_scenes``)."""
+    config = load_with_uids(path)
+    if sync_scenes(path, config):
+        config = load_config(path, missing_ok=True)
+    return config
+
+
+def load_with_uids(path: Path) -> AppConfig:
     """Give cameras without a uid one (written to ``path``), then load the config.
 
     A missing cameras.toml is an empty config: add_camera creates it.
@@ -98,13 +107,10 @@ def prepare_config(path: Path) -> AppConfig:
                     "'%s'. If it is the same camera, set uid = \"%s\" in its section of %s",
                     name, media_dir / old, name, old, path,
                 )  # fmt: skip
-    config = load_config(path, missing_ok=True)
-    if _sync_scenes(path, config):
-        config = load_config(path, missing_ok=True)
-    return config
+    return load_config(path, missing_ok=True)
 
 
-def _sync_scenes(path: Path, config: AppConfig) -> bool:
+def sync_scenes(path: Path, config: AppConfig) -> bool:
     """Record scene changes made by hand in cameras.toml as a new period.
 
     A section renamed by hand (no ``scene`` line, so the scene would follow the new name) is a
@@ -127,8 +133,12 @@ def _sync_scenes(path: Path, config: AppConfig) -> bool:
                      name, meta.name, meta.current_scene)  # fmt: skip
             changed = True
             continue
+        # Back in a scene: the predecessor it had there carries over, unless it is configured.
+        pred = store.earlier_predecessor(meta, dev.scene)
+        if pred in {d.uid for d in config.devices.values()}:
+            pred = None
         try:
-            store.enter_scene(config.media_dir, dev.uid, name, dev.scene)
+            store.enter_scene(config.media_dir, dev.uid, name, dev.scene, pred)
         except OSError as e:
             log.warning("camera '%s': could not record scene '%s' in %s: %s",
                         name, dev.scene, folder, e.strerror or e)  # fmt: skip
@@ -148,13 +158,31 @@ class Manager:
         config_path: Path,
         registry: Registry,
         probe: Prober = onvif.probe,
-        load: Callable[[Path], AppConfig] = prepare_config,
+        load: Callable[[Path], AppConfig] = load_with_uids,
+        sync: Callable[[Path, AppConfig], bool] = sync_scenes,
     ):
         self._config_path = config_path
         self._registry = registry
         self._probe = probe
         self._load = load
+        self._sync = sync
         self._lock = asyncio.Lock()
+
+    def _current(self) -> AppConfig:
+        """The config on disk, with scene changes made there by hand recorded."""
+        config = self._load(self._config_path)
+        if self._sync(self._config_path, config):
+            config = self._load(self._config_path)
+        return config
+
+    def _sync_loaded(self, config: AppConfig) -> None:
+        """Record scene changes of ``config``, which the registry has just loaded. Only after
+        a successful reload, so a change that is rolled back leaves no period behind."""
+        try:
+            if self._sync(self._config_path, config):
+                self._registry.reload(self._load(self._config_path))
+        except Exception:
+            log.warning("could not record scene changes", exc_info=True)
 
     async def add(
         self,
@@ -186,7 +214,7 @@ class Manager:
         if scene is not None:
             validate_scene(scene)
         async with self._lock:
-            config = self._load(self._config_path)
+            config = self._current()
             if cam_id in config.devices:
                 raise ValueError(f"camera '{cam_id}' already exists")
             env_path = config.secrets_dir / f"{cam_id}.env"
@@ -245,12 +273,25 @@ class Manager:
             await self._mutate(
                 lambda: config_writer.add_section(self._config_path, cam_id, section), undo
             )
-            store.ensure_folder(config.media_dir, section["uid"], cam_id, scene or cam_id)
+            # The camera is added: a file error from here on is a note, not a failure.
+            problem = None
+            try:
+                store.ensure_folder(config.media_dir, section["uid"], cam_id, scene or cam_id)
+                if pred is not None:
+                    store.enter_scene(
+                        config.media_dir, section["uid"], cam_id, scene or cam_id, pred.uid
+                    )
+            except OSError as e:
+                problem = os_error_text(e)
             if pred is not None:
-                store.enter_scene(
-                    config.media_dir, section["uid"], cam_id, scene or cam_id, continues=pred.uid
+                note = (
+                    f"; continues '{pred.name}' in scene '{scene or cam_id}'"
+                    if problem is None
+                    else f"; could not record that it continues '{pred.name}' ({problem}); "
+                    "declare it again with set_scene"
                 )
-                note = f"; continues '{pred.name}' in scene '{scene or cam_id}'"
+            elif problem is not None:
+                note += f"; could not update its media folder ({problem})"
             caps = next(c["capabilities"] for c in self._registry.list() if c["id"] == cam_id)
             return (
                 f"added '{cam_id}' ({info.manufacturer} {info.model}); "
@@ -296,7 +337,7 @@ class Manager:
     async def rename(self, old: str, new: str) -> str:
         validate_id(new)
         async with self._lock:
-            config = self._load(self._config_path)
+            config = self._current()
             if old not in config.devices:
                 raise ValueError(f"camera '{old}' not found")
             if new in config.devices:
@@ -322,19 +363,27 @@ class Manager:
                 undo.append(lambda: os.rename(new_path, old_path))
                 updates["secrets_file"] = str(new_path)
 
-            await self._mutate(
-                lambda: config_writer.rename_section(self._config_path, old, new, updates), undo
-            )
-            # Media stay in the camera's uid folder; only its recorded name changes.
-            dev = config.devices[old]
-            if (config.media_dir / dev.uid).is_dir():
-                store.ensure_folder(config.media_dir, dev.uid, new, dev.scene or old)
-            if self._removed_named(config, new):
-                return (
-                    f"renamed '{old}' to '{new}'; an earlier, removed camera named '{new}' "
-                    "keeps its files separately"
+            # Under the camera lock, so a running capture does not write the old name back.
+            note = ""
+            async with self._registry.lock(old):
+                await self._mutate(
+                    lambda: config_writer.rename_section(self._config_path, old, new, updates),
+                    undo,
+                    close_retired=False,  # needs the camera lock held here
                 )
-            return f"renamed '{old}' to '{new}'"
+                # Media stay in the camera's uid folder; only its recorded name changes.
+                dev = config.devices[old]
+                try:
+                    if (config.media_dir / dev.uid).is_dir():
+                        store.ensure_folder(config.media_dir, dev.uid, new, dev.scene or old)
+                except OSError as e:
+                    note = f"; could not update its media folder ({os_error_text(e)})"
+            await self._registry.close_retired()
+            if self._removed_named(config, new):
+                note = (
+                    f"; an earlier, removed camera named '{new}' keeps its files separately" + note
+                )
+            return f"renamed '{old}' to '{new}'{note}"
 
     async def set_scene(
         self, camera: str, scene: str, successor: SuccessorPrompt | None = None
@@ -343,14 +392,18 @@ class Manager:
         scene has removed cameras, ``successor`` asks whether it replaces one of them."""
         validate_scene(scene)
         async with self._lock:
-            config = self._load(self._config_path)
+            config = self._current()
             if camera not in config.devices:
                 raise ValueError(f"camera '{camera}' not found")
             dev = config.devices[camera]
             try:
                 if dev.scene == scene:
                     return await self._declare_successor(config, camera, scene, successor)
-                pred, note = await self._ask_successor(config, camera, scene, successor)
+                again = self._predecessor_there(config, dev.uid, scene)
+                if again is not None:  # back in a scene: its predecessor there carries over
+                    pred, note = None, f"; continues '{again.name}' again"
+                else:
+                    pred, note = await self._ask_successor(config, camera, scene, successor)
             except _Cancelled:
                 return CANCELLED
             # Under the camera lock, so a running capture belongs to one scene, not two.
@@ -358,20 +411,42 @@ class Manager:
                 await self._mutate(
                     lambda: config_writer.set_key(self._config_path, camera, "scene", scene),
                     close_retired=False,  # needs the camera lock held here
+                    sync=False,  # the period is recorded below, with its predecessor
                 )
-                dev = self._registry.config(camera)
-                meta = store.enter_scene(
-                    config.media_dir, dev.uid, camera, scene, pred.uid if pred else None
-                )
-                # Capture names have whole seconds and the period starts at the next one:
-                # hold the camera until then, so no later capture is stamped in the old scene.
-                wait = (meta.scenes[-1].since - datetime.now().astimezone()).total_seconds()
-                if wait > 0:
-                    await asyncio.sleep(wait)
+                if pred is not None:
+                    note = f"; continues '{pred.name}'"
+                try:
+                    meta = store.enter_scene(
+                        config.media_dir,
+                        dev.uid,
+                        camera,
+                        scene,
+                        pred.uid if pred else again.uid if again else None,
+                    )
+                except OSError as e:  # the move is done; the next reload records the period
+                    note = f"; could not record the move in its media folder ({os_error_text(e)})"
+                    if pred is not None:
+                        note += "; declare the successor again with set_scene"
+                else:
+                    # Capture names have whole seconds and the period starts at the next one:
+                    # hold the camera until then, so no later capture is stamped in the old
+                    # scene.
+                    wait = (meta.scenes[-1].since - datetime.now().astimezone()).total_seconds()
+                    if wait > 0:
+                        await asyncio.sleep(wait)
             await self._registry.close_retired()
-            if pred is not None:
-                note = f"; continues '{pred.name}'"
             return f"moved '{camera}' to scene '{scene}'{note}"
+
+    @staticmethod
+    def _predecessor_there(config: AppConfig, uid: str, scene: str) -> store.CameraMeta | None:
+        """The removed camera that was this camera's predecessor when it was last in
+        ``scene``, if its folder is still there."""
+        meta = store.read_meta(config.media_dir / uid)
+        pred = store.earlier_predecessor(meta, scene) if meta else None
+        if pred is None or pred in {d.uid for d in config.devices.values()}:
+            return None
+        found = store.read_meta(config.media_dir / pred)
+        return found if found is not None and found.uid == pred else None
 
     async def _declare_successor(
         self, config: AppConfig, camera: str, scene: str, successor: SuccessorPrompt | None
@@ -391,7 +466,7 @@ class Manager:
 
     async def remove(self, cam_id: str) -> str:
         async with self._lock:
-            config = self._load(self._config_path)
+            config = self._current()
             if cam_id not in config.devices:
                 raise ValueError(f"camera '{cam_id}' not found")
             owned = self._owned_secrets(cam_id, config.secrets_dir)
@@ -412,14 +487,14 @@ class Manager:
     async def removed(self) -> list[store.StoredCamera]:
         """Removed cameras whose files are still in media_dir."""
         async with self._lock:
-            config = self._load(self._config_path)
+            config = self._current()
             return store.removed_cameras(config.media_dir, {d.uid for d in config.devices.values()})
 
     async def delete(self, name: str, confirm: DeletePrompt | None) -> str:
         """Delete the configured camera ``name`` and/or removed cameras of that name, with their
         files, once the user approves through ``confirm``. Without it nothing happens."""
         async with self._lock:
-            config = self._load(self._config_path)
+            config = self._current()
             targets = self._delete_targets(config, name)
             if not targets:
                 raise ValueError(f"no camera or leftover files named '{name}'")
@@ -545,7 +620,9 @@ class Manager:
 
     async def reload(self) -> list[dict]:
         async with self._lock:
-            self._registry.reload(self._load(self._config_path))
+            config = self._load(self._config_path)
+            self._registry.reload(config)
+            self._sync_loaded(config)
             await self._registry.close_retired()
             return self._registry.list()
 
@@ -608,17 +685,19 @@ class Manager:
         undo: Sequence[Callable[[], None]] = (),
         *,
         close_retired: bool = True,
+        sync: bool = True,
     ) -> None:
         """Apply ``change`` and reload; on failure restore the config and run ``undo``.
-        Afterwards (unless ``close_retired`` is false), close the connections of replaced or
-        removed cameras."""
+        Afterwards record scene changes (unless ``sync`` is false) and close the connections
+        of replaced or removed cameras (unless ``close_retired`` is false)."""
         original: str | None = None
         existed = self._config_path.exists()
         try:
             if existed:
                 original = self._config_path.read_bytes().decode("utf-8")
             change()
-            self._registry.reload(self._load(self._config_path))
+            config = self._load(self._config_path)
+            self._registry.reload(config)
         except Exception:
             try:
                 if original is not None:
@@ -633,6 +712,8 @@ class Manager:
                 except Exception:
                     log.exception("rollback: undo step failed")
             raise
+        if sync:
+            self._sync_loaded(config)
         if close_retired:
             await self._registry.close_retired()
 

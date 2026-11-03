@@ -14,8 +14,16 @@ def client_message(e: Exception) -> str:
     """The error's message if it is safe to show; otherwise a generic one (details logged)."""
     if isinstance(e, (CameraMcpError, ValueError)):
         return str(e)
+    if isinstance(e, OSError) and e.filename:  # a file error; socket errors have no filename
+        log.error("%s in tool call: %s", type(e).__name__, e)
+        return f"could not access {os_error_text(e)}"
     log.error("unexpected %s in tool call", type(e).__name__)
     return f"internal error ({type(e).__name__}); see server log"
+
+
+def os_error_text(e: OSError) -> str:
+    """``<path>: <reason>`` for a file error."""
+    return f"{e.filename}: {e.strerror or type(e).__name__}"
 
 
 async def guarded[T](fn: Callable[[], Awaitable[T]]) -> T:

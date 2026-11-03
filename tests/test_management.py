@@ -1,5 +1,7 @@
 import asyncio
+import errno
 import re
+import shutil
 import stat
 import tomllib
 from datetime import datetime
@@ -1172,3 +1174,193 @@ async def test_rename_with_corrupt_meta_keeps_scene(env):
     await mgr.rename("office", "front")
     meta = read_meta(folder)
     assert meta.name == "front" and meta.current_scene == "office"
+
+
+def production_manager(cfg: Path) -> tuple[Manager, Registry]:
+    registry = Registry(load_config(cfg), adapters={"tapo_onvif": FakeCamPTZ, "onvif": FakeCamPTZ})
+    return Manager(cfg, registry, probe=FakeProbe()), registry
+
+
+async def test_failed_set_scene_leaves_no_period(env, monkeypatch):
+    cfg, _, _ = env
+    mgr, registry = production_manager(cfg)
+    folder = registry.folder("office")
+
+    def failing(config):
+        raise ConfigError("boom")
+
+    monkeypatch.setattr(registry, "reload", failing)
+    with pytest.raises(ConfigError, match="boom"):
+        await mgr.set_scene("office", "desk")
+    monkeypatch.undo()
+    await mgr.reload()
+    assert [p.scene for p in read_meta(folder).scenes] == ["office"]
+
+
+async def test_failed_reload_records_no_scene_period(env):
+    cfg, _, _ = env
+    mgr, registry = production_manager(cfg)
+    folder = registry.folder("office")
+    cfg.write_text(
+        cfg.read_text().replace('type = "tapo_onvif"\n', 'type = "nope"\nscene = "desk"\n')
+    )
+    with pytest.raises(ConfigError, match="unknown type"):
+        await mgr.reload()
+    assert [p.scene for p in read_meta(folder).scenes] == ["office"]
+
+
+async def test_set_scene_logs_no_hand_edit_hint(env, caplog):
+    cfg, _, _ = env
+    mgr, registry = production_manager(cfg)
+    registry.folder("office")
+    with caplog.at_level("INFO", logger="ipcam_mcp"):
+        await mgr.set_scene("office", "desk")
+    assert "set_scene can declare" not in caplog.text
+
+
+def _unwritable(monkeypatch, name):
+    def fail(media_dir, uid, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied", str(media_dir / uid))
+
+    monkeypatch.setattr(store, name, fail)
+
+
+async def test_add_reports_unwritable_folder_after_commit(env, monkeypatch):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    _unwritable(monkeypatch, "ensure_folder")
+    result = await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    assert result.startswith("added 'garage'")
+    assert "; could not update its media folder (" in result and "Permission denied" in result
+    assert "garage" in ids(registry)
+
+
+async def test_add_successor_reports_unrecorded_predecessor(env, monkeypatch):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, _, _ = make_manager(cfg)
+    _unwritable(monkeypatch, "enter_scene")
+    result = await mgr.add(
+        "door", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)), scene="garage",
+        successor=asking(0),
+    )  # fmt: skip
+    assert result.startswith("added 'door'")
+    assert "could not record that it continues 'garage'" in result
+    assert "declare it again with set_scene" in result
+
+
+async def test_rename_reports_unwritable_folder_after_commit(env, monkeypatch):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    _unwritable(monkeypatch, "ensure_folder")
+    result = await mgr.rename("office", "front")
+    assert result.startswith("renamed 'office' to 'front'")
+    assert "; could not update its media folder (" in result
+
+
+async def test_set_scene_reports_unwritable_folder_after_commit(env, monkeypatch):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    _unwritable(monkeypatch, "enter_scene")
+    result = await mgr.set_scene("office", "desk")
+    assert result.startswith("moved 'office' to scene 'desk'")
+    assert "; could not record the move in its media folder (" in result
+
+
+async def test_rename_waits_for_running_capture(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    order: list[str] = []
+
+    async def capture():
+        async with registry.lock("office"):
+            await asyncio.sleep(0.05)
+            order.append("capture done")
+
+    task = asyncio.create_task(capture())
+    await asyncio.sleep(0)
+    await mgr.rename("office", "front")
+    order.append("renamed")
+    await task
+    assert order == ["capture done", "renamed"]
+
+
+async def test_set_scene_back_keeps_predecessor_without_asking(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    await mgr.set_scene("office", "garage", successor=asking(0))
+    await mgr.set_scene("office", "office")
+    again = asking(None)
+    result = await mgr.set_scene("office", "garage", successor=again)
+    assert result == "moved 'office' to scene 'garage'; continues 'garage' again"
+    assert again.calls == []
+    assert last_period(registry, "office").continues == "zzzzzzzz"
+
+
+async def test_set_scene_back_after_predecessor_deleted_records_none(env):
+    cfg, _, _ = env
+    folder = removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    await mgr.set_scene("office", "garage", successor=asking(0))
+    await mgr.set_scene("office", "office")
+    shutil.rmtree(folder)
+    assert await mgr.set_scene("office", "garage") == "moved 'office' to scene 'garage'"
+    assert last_period(registry, "office").continues is None
+
+
+async def test_set_scene_back_does_not_carry_a_configured_camera(env):
+    cfg, _, shared = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    await mgr.set_scene("office", "garage", successor=asking(0))
+    await mgr.set_scene("office", "office")
+    cfg.write_text(
+        cfg.read_text() + '\n[cameras.garage]\nuid = "zzzzzzzz"\ntype = "tapo_onvif"\n'
+        f'secrets_file = "{shared}"\nhost_var = "OFFICE_HOST"\nuser_var = "OFFICE_USER"\n'
+        'password_var = "OFFICE_PASS"\n'
+    )
+    await mgr.reload()
+    assert await mgr.set_scene("office", "garage") == "moved 'office' to scene 'garage'"
+    assert last_period(registry, "office").continues is None
+
+
+async def test_hand_edit_back_keeps_predecessor(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    await mgr.set_scene("office", "garage", successor=asking(0))
+    await mgr.set_scene("office", "office")
+    cfg.write_text(cfg.read_text().replace('scene = "office"', 'scene = "garage"'))
+    await mgr.reload()
+    assert (last_period(registry, "office").scene, last_period(registry, "office").continues) == (
+        "garage",
+        "zzzzzzzz",
+    )
+
+
+async def test_failure_after_commit_still_succeeds(env, caplog):
+    cfg, _, _ = env
+
+    calls = 0
+
+    def broken_sync(path, config):
+        nonlocal calls
+        calls += 1
+        if calls > 1:  # the first call is the hand-edit sync before the change
+            raise AssertionError("boom")
+        return False
+
+    registry = Registry(load_config(cfg), adapters={"tapo_onvif": FakeCamPTZ, "onvif": FakeCamPTZ})
+    mgr = Manager(cfg, registry, probe=FakeProbe(), sync=broken_sync)
+    with caplog.at_level("WARNING", logger="ipcam_mcp"):
+        result = await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    assert result.startswith("added 'garage'")
+    assert "could not record scene changes" in caplog.text

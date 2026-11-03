@@ -7,6 +7,7 @@ does not inherit it.
 """
 
 import contextlib
+import errno
 import json
 import logging
 import os
@@ -125,12 +126,15 @@ def read_meta(folder: Path) -> CameraMeta | None:
 
 
 def meta_for_update(folder: Path) -> CameraMeta | None:
-    """``camera.json`` read before writing it: None when there is none to keep. A corrupt one
-    is first renamed to ``camera.json.bad-<time>``; a read error (which may pass) raises, so a
-    good history is never replaced."""
+    """``camera.json`` read before writing it: None when there is none to keep. A corrupt one,
+    or one of another camera, is first renamed to ``camera.json.bad-<time>``; a read error
+    (which may pass) raises, so a good history is never replaced."""
     path = folder / META
     try:
-        return _parse_meta(path)
+        meta = _parse_meta(path)
+        if meta.uid != folder.name:
+            raise ValueError(f"uid {meta.uid} is not its folder's")
+        return meta
     except FileNotFoundError:
         return None
     except _CORRUPT as e:
@@ -214,7 +218,8 @@ def enter_scene(
     ``continues``). Re-entering the current scene only sets ``continues`` on its period."""
     folder = ensure_folder(media_dir, uid, name, scene)
     meta = read_meta(folder)
-    assert meta is not None  # ensure_folder just wrote it
+    if meta is None:  # ensure_folder just wrote it, so reading it failed
+        raise OSError(errno.EIO, "could not read it back", str(folder / META))
     last = meta.scenes[-1]
     if last.scene == scene:
         if continues is None or last.continues == continues:
@@ -227,6 +232,11 @@ def enter_scene(
     meta = replace(meta, scenes=periods)
     write_meta(folder, meta)
     return meta
+
+
+def earlier_predecessor(meta: CameraMeta, scene: str) -> str | None:
+    """The predecessor the camera had the last time it was in ``scene``, if any."""
+    return next((p.continues for p in reversed(meta.scenes) if p.scene == scene), None)
 
 
 def usage(folder: Path, meta: CameraMeta) -> StoredCamera:
