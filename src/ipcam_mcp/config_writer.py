@@ -146,9 +146,14 @@ def ensure_uids(path: Path, reserved: Collection[str]) -> dict[str, str]:
         return {}
     doc = _load(path)
     cameras = doc.get("cameras", {})
-    taken = set(reserved) | {str(s["uid"]) for s in cameras.values() if "uid" in s}
+    if not isinstance(cameras, dict):
+        raise ConfigError(f"{path}: 'cameras' must be a table")
+    sections = {
+        n: s for n, s in cameras.items() if isinstance(s, dict)
+    }  # load_config reports the rest
+    taken = set(reserved) | {str(s["uid"]) for s in sections.values() if "uid" in s}
     assigned: dict[str, str] = {}
-    for name, section in cameras.items():
+    for name, section in sections.items():
         if "uid" not in section:
             uid = store.new_uid(taken)
             taken.add(uid)

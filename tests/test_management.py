@@ -172,7 +172,7 @@ async def test_add_file_mode_two_step(env):
     first = await mgr.add("garage", "10.0.0.5", None)
     assert first == (
         f"Fill in USER and PASSWORD in {env_file}, then call add_camera again "
-        "with id 'garage', the same host and credentials_via=\"file\"."
+        "with name 'garage', the same host and credentials_via=\"file\"."
     )
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
     assert dotenv_values(env_file, interpolate=False) == {
@@ -662,3 +662,17 @@ async def test_rename_to_name_of_removed_camera_notes_it(env):
     assert "removed camera named 'front'" in result
     assert read_meta(old).name == "front" and (old / "front_20250101-000000.jpg").exists()
     assert registry.folder("front") == media / uid_for("office")
+
+
+def test_prepare_config_warns_about_detached_history(env, caplog):
+    """A section that lost its uid (editor save, old backup) gets a new one; the earlier
+    camera's folder with the same name is pointed out instead of silently orphaned."""
+    cfg, _, _ = env
+    media = cfg.parent / "media"
+    write_meta(
+        media / "zzzzzzzz", CameraMeta("zzzzzzzz", "office", datetime(2025, 1, 1).astimezone())
+    )
+    cfg.write_text(cfg.read_text().replace(f'uid = "{uid_for("office")}"\n', ""))
+    with caplog.at_level("WARNING", logger="ipcam_mcp"):
+        prepare_config(cfg)
+    assert "zzzzzzzz" in caplog.text and 'uid = "zzzzzzzz"' in caplog.text

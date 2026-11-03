@@ -311,3 +311,10 @@ def test_media_dir_of(tmp_path):
     cfg.write_text("not = [valid")
     with pytest.raises(ConfigError, match="invalid TOML"):
         media_dir_of(cfg)
+
+
+def test_camera_section_not_a_table(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('[cameras]\ngarage = "x"\n')
+    with pytest.raises(ConfigError, match="camera 'garage': must be a table"):
+        load_config(p)

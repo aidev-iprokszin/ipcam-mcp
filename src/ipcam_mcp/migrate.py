@@ -74,6 +74,24 @@ def migrate_flat_layout(media_dir: Path, configured: Mapping[str, str]) -> Migra
             earlier.setdefault(meta.name, uid)
     taken = existing | set(configured.values())
 
+    try:
+        _migrate_groups(media_dir, configured, groups, earlier, taken, report)
+    except OSError as e:  # stop; the rest stays in the old layout and is retried next start
+        report.error = f"could not migrate {e.filename or media_dir}: {e.strerror or e}"
+        return report
+    with contextlib.suppress(OSError):
+        (media_dir / "baselines").rmdir()
+    return report
+
+
+def _migrate_groups(
+    media_dir: Path,
+    configured: Mapping[str, str],
+    groups: dict[str, _Group],
+    earlier: dict[str, str],
+    taken: set[str],
+    report: MigrationReport,
+) -> None:
     for name in sorted(groups):
         group = groups[name]
         uid = configured.get(name) or earlier.get(name)
@@ -101,17 +119,13 @@ def migrate_flat_layout(media_dir: Path, configured: Mapping[str, str]) -> Migra
             try:
                 dst.parent.mkdir(exist_ok=True)
                 os.rename(src, dst)
-            except OSError as e:
-                report.error = f"could not move {src} to {dst}: {e.strerror or e}"
+            except OSError:
                 if count:
                     report.moved[name] = count
-                return report
+                raise
             count += 1
         if count:
             report.moved[name] = count
         if group.baselines is not None:
             with contextlib.suppress(OSError):
                 group.baselines.rmdir()  # only if empty
-    with contextlib.suppress(OSError):
-        (media_dir / "baselines").rmdir()
-    return report

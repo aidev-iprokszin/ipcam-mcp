@@ -33,6 +33,10 @@ class CameraMeta:
     created: datetime
 
 
+def is_uid(text: str) -> bool:
+    return bool(_UID_RE.fullmatch(text))
+
+
 def new_uid(taken: Collection[str]) -> str:
     while True:
         uid = "".join(secrets.choice(_ALPHABET) for _ in range(8))

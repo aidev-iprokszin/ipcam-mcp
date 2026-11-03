@@ -69,9 +69,18 @@ def prepare_config(path: Path) -> AppConfig:
 
     A missing cameras.toml is an empty config: add_camera creates it.
     """
-    reserved = store.folder_names(media_dir_of(path))
+    media_dir = media_dir_of(path)
+    reserved = store.folder_names(media_dir)
     for name, uid in config_writer.ensure_uids(path, reserved).items():
         log.info("camera '%s' got uid %s", name, uid)
+        for old in sorted(reserved):
+            meta = store.read_meta(media_dir / old) if store.is_uid(old) else None
+            if meta is not None and meta.name == name:
+                log.warning(
+                    "camera '%s' got a new uid, but %s holds media of an earlier camera named "
+                    "'%s'. If it is the same camera, set uid = \"%s\" in its section of %s",
+                    name, media_dir / old, name, old, path,
+                )  # fmt: skip
     return load_config(path, missing_ok=True)
 
 
@@ -113,7 +122,7 @@ class Manager:
                     ]
                     if users:
                         raise ValueError(
-                            f"{env_path} is already used by camera '{users[0]}'; pick another id"
+                            f"{env_path} is already used by camera '{users[0]}'; pick another name"
                         )
                 creds = self._file_credentials(cam_id, host, env_path)
                 if isinstance(creds, str):
@@ -235,7 +244,7 @@ class Manager:
         """Credentials from ``<id>.env``, or the instruction to fill it in."""
         instruction = (
             f"Fill in USER and PASSWORD in {env_path}, then call add_camera again "
-            f"with id '{cam_id}', the same host and credentials_via=\"file\"."
+            f"with name '{cam_id}', the same host and credentials_via=\"file\"."
         )
         if not env_path.exists():
             config_writer.write_secrets_file(env_path, {"HOST": host, "USER": "", "PASSWORD": ""})

@@ -93,6 +93,8 @@ def media_dir_of(path: Path) -> Path:
 
 
 def _load_device(dev_id: str, spec: dict[str, Any], checked: set[Path]) -> DeviceConfig:
+    if not isinstance(spec, dict):
+        raise ConfigError(f"camera '{dev_id}': must be a table ([cameras.{dev_id}])")
     uid = spec.get("uid")
     if uid is None:
         raise ConfigError(f"camera '{dev_id}': missing uid")

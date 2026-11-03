@@ -279,3 +279,16 @@ def test_ensure_uids_unwritable(tmp_path, monkeypatch):
     with pytest.raises(ConfigError, match="must be writable"):
         ensure_uids(p, set())
     assert p.read_bytes() == before
+
+
+def test_ensure_uids_cameras_not_a_table(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text("cameras = 5\n")
+    with pytest.raises(ConfigError, match="'cameras' must be a table"):
+        ensure_uids(p, set())
+
+
+def test_ensure_uids_skips_non_table_section(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('[cameras]\ngarage = "x"\n')
+    assert ensure_uids(p, set()) == {}  # load_config reports it

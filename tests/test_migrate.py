@@ -134,3 +134,16 @@ def test_failed_move_stops_and_reports(tmp_path, monkeypatch):
     assert report.error is None
     assert not list(m.glob("office_*")) and not (m / "baselines").exists()
     assert len(list((m / U).glob("office_*"))) == 3
+
+
+def test_unwritable_target_reports_instead_of_raising(tmp_path, monkeypatch):
+    m = tmp_path / "media"
+    office_flat(m)
+
+    def deny(folder, meta):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(migrate.store, "write_meta", deny)
+    report = migrate_flat_layout(m, {"office": U})
+    assert report.error is not None and "Permission denied" in report.error
+    assert (m / "office_20261103-111200.jpg").exists()
