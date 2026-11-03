@@ -81,7 +81,7 @@ async def test_live_preset_save_goto_remove(registry):
 
 
 async def test_live_baseline_compare_no_change(registry):
-    folder = registry.media_dir / "baselines" / DEVICE
+    folder = registry.folder(DEVICE) / "baselines"
     try:
         async with Client(build_server(registry)) as client:
             saved = await client.call_tool(
