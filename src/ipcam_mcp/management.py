@@ -224,18 +224,18 @@ class Manager:
             if cam_id in config.devices:
                 raise ValueError(f"camera '{cam_id}' already exists")
             env_path = config.secrets_dir / f"{cam_id}.env"
+            if env_path.exists():  # e.g. kept by a rename because cameras share it
+                users = [
+                    other
+                    for other, spec in self._sections().items()
+                    if self._is_managed(spec, env_path)
+                ]
+                if users:
+                    raise ValueError(
+                        f"{env_path} is already used by camera '{users[0]}'; pick another name"
+                    )
 
             if prompt is None:
-                if env_path.exists():
-                    users = [
-                        other
-                        for other, spec in self._sections().items()
-                        if self._is_managed(spec, env_path)
-                    ]
-                    if users:
-                        raise ValueError(
-                            f"{env_path} is already used by camera '{users[0]}'; pick another name"
-                        )
                 creds = self._file_credentials(cam_id, host, env_path)
                 if isinstance(creds, str):
                     return creds
@@ -353,12 +353,13 @@ class Manager:
             new_path = config.secrets_dir / f"{new}.env"
             sections = self._sections()
             # The managed file moves with the camera, unless another camera uses it too.
+            own = self._is_managed(sections[old], old_path)
             sharing = [
                 other
                 for other, spec in sections.items()
-                if other != old and self._is_managed(spec, old_path)
+                if own and other != old and self._is_managed(spec, old_path)
             ]
-            managed = self._is_managed(sections[old], old_path) and not sharing
+            managed = own and not sharing
             if managed and new_path.exists():
                 raise ConfigError(f"secrets file already exists: {new_path}")
 
