@@ -1,0 +1,36 @@
+# Copy to ~/.config/ipcam-mcp/cameras.toml (or point IPCAM_MCP_CONFIG at it).
+# Secrets stay in the referenced env file; this file only names the variables.
+
+# Where snapshots and recordings are saved (optional).
+media_dir = "~/.local/share/ipcam-mcp/media"
+
+# Let Claude add, rename and remove cameras (default true; set false to turn the tools off;
+# read at startup, so run `/mcp reconnect ipcam` after changing it).
+# allow_management = true
+
+# Where add_camera keeps one <id>.env credentials file per camera it adds. Files in this
+# folder are managed: rename_camera moves them and remove_camera deletes them, so keep
+# hand-made secrets files elsewhere (like the secrets_file below).
+# secrets_dir = "~/.config/ipcam-mcp/secrets"
+
+[cameras.livingroom]
+type = "onvif"
+secrets_file = "~/.config/ipcam-mcp/secrets.env"
+host_var = "CAMERA_IP"
+user_var = "CAMERA_USER"          # Tapo: the "Camera Account", not the TP-Link cloud login
+password_var = "CAMERA_PASSWORD"
+# Optional settings (defaults for type "onvif" shown where fixed):
+# onvif_port = 80
+# rtsp_port = 554                 # default: the port in the camera's stream URI, else 554
+# ptz = false                     # true if the camera can pan/tilt
+# invert_pan = false              # true if "left" turns the view right
+# stream_high = "/stream1"        # default: looked up over ONVIF
+# stream_low = "/stream2"
+
+# TP-Link Tapo example. "tapo_onvif" sets onvif_port 2020, ptz, invert_pan and the streams above.
+# [cameras.office]
+# type = "tapo_onvif"
+# secrets_file = "~/.config/ipcam-mcp/secrets-tapo.env"
+# host_var = "CAMERA_IP"
+# user_var = "CAMERA_USER"
+# password_var = "CAMERA_PASSWORD"

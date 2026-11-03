@@ -1,0 +1,42 @@
+[project]
+name = "ipcam-mcp"
+version = "0.2.0"
+description = "MCP server for local IP cameras (ONVIF/RTSP): snapshots, recordings, pan/tilt, presets"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "aidev-iprokszin" }]
+requires-python = ">=3.13"
+dependencies = [
+    "mcp>=2.3.0",
+    "onvif-zeep-async>=4.3.0",
+    "pillow>=13.0.0",
+    "python-dotenv>=1.2.4",
+    "tomlkit>=0.15.2",
+]
+
+[project.scripts]
+ipcam-mcp = "ipcam_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.13.3,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.3",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["live: hits the real camera (opt-in: -m live)"]
+addopts = "-m 'not live'"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ASYNC221"]

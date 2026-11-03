@@ -1,0 +1,17 @@
+# Local config & secrets
+cameras.toml
+*.env
+.env*
+
+# Captured media
+media/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
