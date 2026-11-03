@@ -51,6 +51,16 @@ scene. Moving a camera to another scene starts a new period in its `camera.json`
 baselines from before the move stay with the old scene, and `camera_compare` only compares within
 the current one, so it never reports a different place as a change.
 
+**Replacing a camera.** When a camera enters a scene that removed cameras watched (with
+`add_camera`, or `set_scene`), you are asked in a form whether it replaces one of them, is an
+additional camera, or to cancel. A replacement is its *successor*: until it has a snapshot of
+its own there, `camera_compare` compares with the old camera's newest snapshot in the scene, and
+baselines are looked up along the predecessors (up to 10). The result then says which camera
+took the reference, since angle, lens or resolution may differ. Without form support the camera
+is added as an additional one; call `set_scene` with its current scene later, from a client that
+shows forms, to declare it a successor. `delete_camera` mentions when a camera is another's
+predecessor.
+
 ## Prerequisites
 
 - Linux or WSL2, on the same network as the camera
@@ -160,7 +170,7 @@ agent picked up elsewhere.
 |---|---|
 | `add_camera(name, host, credentials_via="form", onvif_port=None, scene=None)` | Verifies the login over ONVIF (tries port 80, then 2020, unless you give `onvif_port`), detects pan/tilt, then adds the camera with a new uid. `name` and `scene` are lowercase letters, digits, `-`, `_` (max 32); `scene` defaults to the name |
 | `rename_camera(old, new)` | Changes a camera's name; its uid, scene, baselines, snapshots and recordings stay with it (no files move), and its secrets file is renamed too if the tool created it |
-| `set_scene(camera, scene)` | Moves a camera to another scene (the place it watches). Earlier snapshots and baselines stay with the earlier scene |
+| `set_scene(camera, scene)` | Moves a camera to another scene (the place it watches). Earlier snapshots and baselines stay with the earlier scene. If removed cameras watched the scene, a form asks whether it replaces one of them (see *Replacing a camera*); with the current scene it asks that again if no predecessor is declared yet |
 | `remove_camera(name)` | Removes the camera from the config; keeps its snapshots, recordings and baselines (it becomes a *removed camera*) |
 | `delete_camera(name)` | Deletes the camera (config entry, its managed secrets file) and its folder with all snapshots, recordings and baselines, or the leftover folder of a removed camera with that name. **You** approve it in a form listing what will be deleted; with several matches you pick one or all. Without form support nothing is deleted and the result says what to delete by hand |
 | `reload_cameras()` | Always available. Re-reads `cameras.toml` after a manual edit and lists the cameras |

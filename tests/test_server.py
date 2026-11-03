@@ -1008,3 +1008,140 @@ async def test_snapshot_without_camera_or_from_path_errors(registry):
     r = await call(registry, "camera_snapshot", {})
     assert r.is_error
     assert "camera is required unless from_path is given" in text_of(r)
+
+
+# --- successor forms ---
+
+
+def answering_each(*answers):
+    """An elicitation callback giving one (action, content) answer per call."""
+    calls: list = []
+    queue = list(answers)
+
+    async def cb(context, params):
+        calls.append(params)
+        action, content = queue.pop(0)
+        return ElicitResult(action=action, content=content)
+
+    cb.calls = calls
+    return cb
+
+
+async def test_add_camera_successor_form(managed, tmp_path):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    label = (
+        "Replaces 'garage' (added 2025-01-01, 1 snapshot, 0 baselines): "
+        "continue its compare and baselines"
+    )
+    cb = answering_each(
+        ("accept", {"choice": label}), ("accept", {"username": "u", "password": "p"})
+    )
+    server = build_server(reg, manager, allow_management=True)
+    async with Client(server, mode="legacy", elicitation_callback=cb) as client:
+        r = await client.call_tool("add_camera", {"name": "garage", "host": "10.0.0.7"})
+    assert not r.is_error, text_of(r)
+    assert text_of(r).endswith("; continues 'garage' in scene 'garage'")
+    choices = cb.calls[0].requested_schema["properties"]["choice"]["enum"]
+    assert choices == [label, "An additional camera in 'garage'", "Cancel"]
+
+
+async def test_set_scene_successor_form(managed, tmp_path):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    cb = answering_each(("accept", {"choice": "An additional camera in 'garage'"}))
+    server = build_server(reg, manager, allow_management=True)
+    async with Client(server, mode="legacy", elicitation_callback=cb) as client:
+        r = await client.call_tool("set_scene", {"camera": "office", "scene": "garage"})
+        cancel = answering_each(("decline", None))
+    assert text_of(r) == "moved 'office' to scene 'garage'"
+    assert len(cb.calls) == 1 and "office" in cb.calls[0].message
+    async with Client(server, mode="legacy", elicitation_callback=cancel) as client:
+        r = await client.call_tool("set_scene", {"camera": "office", "scene": "office"})
+    assert text_of(r) == "moved 'office' to scene 'office'"  # no removed camera in 'office'
+    assert cancel.calls == []
+
+
+# --- predecessor fallback ---
+
+NOTE = "(camera changed: angle, lens or resolution may differ)"
+
+
+async def choose(index):
+    async def successor(message, labels):
+        return index
+
+    return successor
+
+
+async def test_compare_falls_back_to_predecessor_with_note(managed, tmp_path, monkeypatch):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    reg.folder("office")
+    await manager.set_scene("office", "garage", successor=await choose(0))
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager)) as client:
+        r = await client.call_tool("camera_compare", {"camera": "office"})
+    assert not r.is_error, text_of(r)
+    assert text_of(r).startswith("Compared with previous snapshot garage_20250101-000000.jpg")
+    assert f"reference taken by 'garage' {NOTE}" in text_of(r)
+
+
+async def test_compare_prefers_own_snapshot(managed, tmp_path, monkeypatch):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    reg.folder("office")
+    await manager.set_scene("office", "garage", successor=await choose(0))
+    Image.new("RGB", (64, 48)).save(reg.folder("office") / "office_20300101-000000.jpg", "JPEG")
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager)) as client:
+        r = await client.call_tool("camera_compare", {"camera": "office"})
+    assert text_of(r).startswith("Compared with previous snapshot office_20300101-000000.jpg")
+    assert "reference taken by" not in text_of(r)
+
+
+async def test_compare_baseline_from_predecessor_two_steps(managed, tmp_path, monkeypatch):
+    from datetime import datetime as dt
+
+    from ipcam_mcp.baselines import save_baseline
+    from ipcam_mcp.store import CameraMeta, Period, write_meta
+
+    _, reg, manager = managed
+    media = tmp_path / "media"
+    old = dt(2025, 1, 1).astimezone()
+    oldest = leftover(media, "zzzzzzzz", "garage")
+    save_baseline(oldest, "door", oldest / "garage_20250101-000000.jpg", "high", None, "garage")
+    write_meta(
+        media / "yyyyyyyy",
+        CameraMeta("yyyyyyyy", "garage-2", old, (Period("garage", old, "zzzzzzzz"),)),
+    )
+    reg.folder("office")
+
+    async def pick_second(message, labels):
+        return next(i for i, label in enumerate(labels) if "'garage-2'" in label)
+
+    await manager.set_scene("office", "garage", successor=pick_second)
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager)) as client:
+        r = await client.call_tool("camera_compare", {"camera": "office", "baseline": "door"})
+        missing = await client.call_tool("camera_compare", {"camera": "office", "baseline": "x"})
+    assert not r.is_error, text_of(r)
+    assert text_of(r).startswith("Compared with baseline 'door'")
+    assert f"reference taken by 'garage' {NOTE}" in text_of(r)
+    assert "baseline 'x' not found; available: door" in text_of(missing)
+
+
+async def test_predecessor_baseline_skips_position_check(managed, tmp_path, monkeypatch):
+    """Another camera's PTZ position says nothing about this camera's."""
+    from ipcam_mcp.baselines import save_baseline
+
+    _, reg, manager = managed
+    old = leftover(tmp_path / "media")
+    save_baseline(old, "door", old / "garage_20250101-000000.jpg", "high", (5.0, 5.0), "garage")
+    reg.folder("office")
+    await manager.set_scene("office", "garage", successor=await choose(0))
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager)) as client:
+        r = await client.call_tool("camera_compare", {"camera": "office", "baseline": "door"})
+    assert not r.is_error, text_of(r)
+    assert "moved" not in text_of(r)

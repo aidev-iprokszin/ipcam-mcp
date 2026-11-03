@@ -27,7 +27,7 @@ from ipcam_mcp.imaging import (
     crop_box,
     crop_jpeg,
 )
-from ipcam_mcp.management import Credentials, Manager, prepare_config
+from ipcam_mcp.management import Credentials, Manager, SuccessorPrompt, prepare_config
 from ipcam_mcp.media import make_preview
 from ipcam_mcp.migrate import migrate_flat_layout
 from ipcam_mcp.registry import Registry
@@ -83,6 +83,12 @@ def _delete_form(targets: list[str]) -> type[BaseModel]:
     return create_model(
         "DeleteForm", target=(choices, Field(description="What to delete (cannot be undone)"))
     )
+
+
+def _successor_form(labels: list[str], scene: str) -> type[BaseModel]:
+    additional = f"An additional camera in '{scene}'"
+    choices = Literal[(*labels, additional, "Cancel")]  # type: ignore[valid-type]
+    return create_model("SuccessorForm", choice=(choices, Field(description="This camera")))
 
 
 class _LoginForm(BaseModel):
@@ -141,6 +147,26 @@ def _can_show_form(ctx: Context) -> bool:
     session = ctx.request_context.session
     form = types.ClientCapabilities(elicitation=types.ElicitationCapability())
     return session.check_client_capability(form) and session.can_send_request
+
+
+def _successor_prompt(ctx: Context, scene: str) -> SuccessorPrompt | None:
+    """The successor question as a form, or None if the client cannot show one."""
+    if not _can_show_form(ctx):
+        return None
+
+    async def ask(message: str, labels: list[str]) -> int | Literal["additional"] | None:
+        try:
+            result = await ctx.elicit(message, _successor_form(labels, scene))
+        except MCPError:
+            raise ValueError("the form failed; nothing was changed") from None
+        if not isinstance(result, AcceptedElicitation):
+            return None
+        choice = result.data.choice
+        if choice in labels:
+            return labels.index(choice)
+        return None if choice == "Cancel" else "additional"
+
+    return ask
 
 
 def build_server(
@@ -293,15 +319,21 @@ def build_server(
             # while this call waited (delete/remove/rename_camera, reload).
             adapter = registry.get(camera, "camera")
             folder, meta = _scene_meta(camera)
+            scene = meta.current_scene
+            chain = scenes.predecessor_chain(registry.media_dir, meta, scene)
+            owner = None  # the predecessor whose reference is used, if not the camera's own
             base = None
             if baseline is not None:
-                base = scenes.load_scene_baseline(folder, meta, meta.current_scene, baseline)
+                base, owner = scenes.find_scene_baseline(folder, meta, scene, baseline, chain)
                 ref_path = base.path
                 label = f"baseline '{baseline}'"
                 age = datetime.now().astimezone() - base.taken
                 age_s = age.total_seconds()
             else:
-                ref_path = scenes.latest_in_scene(folder, meta, meta.current_scene)
+                ref_path = scenes.latest_in_scene(folder, meta, scene)
+                if ref_path is None and chain:
+                    owner, owner_folder = chain[0]
+                    ref_path = scenes.latest_in_scene(owner_folder, owner, scene)
                 if ref_path is None:
                     raise ValueError(
                         f"no previous snapshot of '{camera}' to compare with; "
@@ -313,7 +345,9 @@ def build_server(
             ref = ref_path.read_bytes()
             path = await adapter.snapshot(quality)
             moved = False
-            if base is not None and base.position is not None and isinstance(adapter, PTZ):
+            # A predecessor's PTZ position says nothing about this camera's.
+            own_base = base is not None and owner is None
+            if own_base and base.position is not None and isinstance(adapter, PTZ):
                 now = await _position(adapter)
                 if now is not None:
                     moved = (
@@ -322,6 +356,11 @@ def build_server(
                     )
             res = compare(ref, path.read_bytes())
             text = _compare_text(res, label, _age(age_s), path, moved)
+            if owner is not None:
+                text += (
+                    f"\nreference taken by '{owner.name}' "
+                    "(camera changed: angle, lens or resolution may differ)"
+                )
             return [Image(data=res.annotated, format="jpeg"), text]
 
     @mcp.tool()
@@ -457,11 +496,12 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
             return None
 
         async def run() -> str:
+            ask = _successor_prompt(ctx, scene or name)
             if credentials_via == "file":
-                return await manager.add(name, host, None, onvif_port, scene)
+                return await manager.add(name, host, None, onvif_port, scene, ask)
             if not _can_show_form(ctx):
                 return NO_FORM_PREFIX + await manager.add(name, host, None, onvif_port, scene)
-            return await manager.add(name, host, prompt, onvif_port, scene)
+            return await manager.add(name, host, prompt, onvif_port, scene, ask)
 
         return await _guarded(run)
 
@@ -471,10 +511,16 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
         return await _guarded(lambda: manager.rename(old, new))
 
     @mcp.tool()
-    async def set_scene(camera: str, scene: str) -> str:
+    async def set_scene(camera: str, scene: str, ctx: Context) -> str:
         """Move a camera to another scene (the place it watches). Its earlier snapshots stay
-        with the earlier scene; camera_compare only compares within the current scene."""
-        return await _guarded(lambda: manager.set_scene(camera, scene))
+        with the earlier scene; camera_compare only compares within the current scene.
+
+        If removed cameras watched that scene, the user is asked in a form whether this camera
+        replaces one of them (it then continues that camera's compare and baselines). Call it
+        with the camera's current scene to answer that question later."""
+        return await _guarded(
+            lambda: manager.set_scene(camera, scene, _successor_prompt(ctx, scene))
+        )
 
     @mcp.tool()
     async def remove_camera(name: str) -> str:
