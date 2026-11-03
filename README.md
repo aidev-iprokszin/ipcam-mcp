@@ -32,6 +32,14 @@ camera's main stream (1080p), `"low"` the sub stream (smaller, quicker). Media i
 camera's own folder, `<media_dir>/<uid>/<camera>_<YYYYmmdd-HHMMSS>.jpg|.mp4` (`media_dir`
 defaults to `~/.local/share/ipcam-mcp/media`).
 
+**Tool hints.** Every tool carries MCP annotations so clients can tell what it does:
+`list_cameras`, `list_scenes`, `scene_timeline` and `ptz_list_presets` are read-only;
+`camera_save_baseline`, `ptz_save_preset`, `ptz_remove_preset`, `remove_camera` and
+`delete_camera` may replace or delete data; everything else only adds files or moves the
+camera. Snapshots and recordings are not marked read-only because they save files. These are
+hints for the client; the server's own safeguards (such as `delete_camera`'s approval form)
+still apply.
+
 **Compare and crop.** `camera_compare` lists the grid cells that changed (the same names as
 `region`) and a box around them. Pass a changed cell as `region` to `camera_snapshot`, ideally
 with `from_path` set to the snapshot you just looked at, to see it closer. Baselines live in

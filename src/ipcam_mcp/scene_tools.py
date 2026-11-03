@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from mcp.server.mcpserver import MCPServer
 
 from ipcam_mcp import scenes
+from ipcam_mcp.annotations import changes, read_only
 from ipcam_mcp.capabilities import Quality
 from ipcam_mcp.registry import Registry
 from ipcam_mcp.tooling import client_message, guarded
@@ -48,7 +49,7 @@ def add_scene_tools(
         blocks = await asyncio.gather(*(one(c) for c in cameras))
         return [item for block in blocks for item in block]
 
-    @mcp.tool()
+    @mcp.tool(**read_only("List scenes"))
     async def list_scenes() -> str:
         """The scenes (places watched): their configured cameras, removed cameras that were
         there, the time of the oldest and newest capture, and how many there are."""
@@ -73,19 +74,19 @@ def add_scene_tools(
 
         return await guarded(run)
 
-    @mcp.tool()
+    @mcp.tool(**changes("Snapshot every camera in a scene", destructive=False, idempotent=False))
     async def scene_snapshot(scene: str, quality: Quality = "high") -> list:
         """Take a snapshot with every camera in the scene, labelled with the camera's name."""
         return await guarded(lambda: per_camera(scene, lambda c: snapshot(c, quality)))
 
-    @mcp.tool()
+    @mcp.tool(**changes("Compare every camera in a scene", destructive=False, idempotent=False))
     async def scene_compare(
         scene: str, baseline: str | None = None, quality: Quality = "high"
     ) -> list:
         """camera_compare for every camera in the scene, labelled with the camera's name."""
         return await guarded(lambda: per_camera(scene, lambda c: compare(c, baseline, quality)))
 
-    @mcp.tool()
+    @mcp.tool(**read_only("Scene timeline"))
     async def scene_timeline(
         scene: str, start: str | None = None, end: str | None = None, limit: int = 50
     ) -> str:
