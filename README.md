@@ -61,6 +61,10 @@ with `from_path` set to the snapshot you just looked at, to see it closer. Basel
 4. **Camera config**: copy `cameras.example.toml` to `~/.config/ipcam-mcp/cameras.toml` (or
    point `IPCAM_MCP_CONFIG` at another path) and adjust the camera id / variable names. Only
    variable *names* go in this file, never the secrets themselves. Use `type = "onvif"`.
+
+   Steps 3 and 4 are optional if you let Claude add cameras: without a config file the server
+   starts with no cameras, and `add_camera` (see [Managing cameras](#managing-cameras))
+   creates `cameras.toml` and the camera's secrets file for your first camera.
 5. **Use it in Claude Code**: the repo ships a project-scoped `.mcp.json`, so running `claude`
    anywhere inside this repo offers the `ipcam` server. Approve it when prompted. If you
    rejected it by mistake, run `claude mcp reset-project-choices` and start `claude` again. Then

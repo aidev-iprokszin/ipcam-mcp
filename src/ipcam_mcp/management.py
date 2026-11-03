@@ -63,13 +63,18 @@ def validate_host(host: str) -> None:
         raise ValueError(message)
 
 
+def _load_or_empty(path: Path) -> AppConfig:
+    """A missing cameras.toml is an empty config: add_camera creates it."""
+    return load_config(path, missing_ok=True)
+
+
 class Manager:
     def __init__(
         self,
         config_path: Path,
         registry: Registry,
         probe: Prober = onvif.probe,
-        load: Callable[[Path], AppConfig] = load_config,
+        load: Callable[[Path], AppConfig] = _load_or_empty,
     ):
         self._config_path = config_path
         self._registry = registry
@@ -227,7 +232,11 @@ class Manager:
 
     def _sections(self) -> dict[str, Any]:
         """Raw ``[cameras.*]`` tables; ``AppConfig`` does not keep ``secrets_file``."""
-        return tomllib.loads(self._config_path.read_text(encoding="utf-8")).get("cameras", {})
+        try:
+            text = self._config_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
+        return tomllib.loads(text).get("cameras", {})
 
     @staticmethod
     def _is_managed(spec: dict[str, Any], managed_path: Path) -> bool:
@@ -239,16 +248,20 @@ class Manager:
         """Apply ``change`` and reload; on failure restore the config and run ``undo``.
         Afterwards, close the connections of replaced or removed cameras."""
         original: str | None = None
+        existed = self._config_path.exists()
         try:
-            original = self._config_path.read_bytes().decode("utf-8")
+            if existed:
+                original = self._config_path.read_bytes().decode("utf-8")
             change()
             self._registry.reload(self._load(self._config_path))
         except Exception:
-            if original is not None:
-                try:
+            try:
+                if original is not None:
                     config_writer.atomic_write(self._config_path, original)
-                except Exception:
-                    log.exception("rollback: could not restore %s", self._config_path)
+                elif not existed:  # first run: the change created the file
+                    self._config_path.unlink(missing_ok=True)
+            except Exception:
+                log.exception("rollback: could not restore %s", self._config_path)
             for step in reversed(undo):
                 try:
                     step()

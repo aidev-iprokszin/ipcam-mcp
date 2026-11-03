@@ -23,6 +23,7 @@ def atomic_write(path: Path, data: str) -> None:
     target = Path(os.path.realpath(path))
     tmp_name: str | None = None
     try:
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(data)
@@ -41,8 +42,11 @@ def atomic_write(path: Path, data: str) -> None:
 
 
 def _load(path: Path) -> tomlkit.TOMLDocument:
+    """Parse ``path``; a missing file is an empty document (first run)."""
     try:
         return tomlkit.parse(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return tomlkit.document()
     except OSError as exc:
         raise ConfigError(f"could not read {path}: {exc.strerror or exc}") from exc
     except TOMLKitError as exc:
