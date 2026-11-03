@@ -1436,3 +1436,78 @@ async def test_rename_does_not_claim_a_file_it_does_not_use(env):
     await mgr.reload()
     assert await mgr.rename("office", "front") == "renamed 'office' to 'front'"
     assert other.exists()
+
+
+def _add_sharer(cfg: Path, name: str, secrets_file: Path) -> None:
+    with cfg.open("a") as f:
+        f.write(
+            f"\n[cameras.{name}]\n"
+            f'uid = "{uid_for(name)}"\n'
+            'type = "tapo_onvif"\n'
+            f'secrets_file = "{secrets_file}"\n'
+            'host_var = "HOST"\nuser_var = "USER"\npassword_var = "PASSWORD"\n'
+        )
+
+
+async def test_rename_note_names_every_sharer(env):
+    cfg, secrets_dir, _ = env
+    mgr, _, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    managed = secrets_dir / "garage.env"
+    _add_sharer(cfg, "twin", managed)
+    _add_sharer(cfg, "porch", managed)
+    await mgr.reload()
+    result = await mgr.rename("garage", "carport")
+    assert result.endswith(
+        f"its secrets file {managed} is shared with 'twin', 'porch' and keeps its name"
+    )
+
+
+async def test_rename_sees_sharing_through_a_symlinked_path(env, tmp_path):
+    cfg, secrets_dir, _ = env
+    mgr, _, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    link = tmp_path / "secrets-link"
+    link.symlink_to(secrets_dir)
+    _add_sharer(cfg, "twin", link / "garage.env")
+    await mgr.reload()
+    result = await mgr.rename("garage", "carport")
+    assert "is shared with 'twin'" in result
+    assert (secrets_dir / "garage.env").exists()
+
+
+async def _kept_file_setup(env):
+    cfg, secrets_dir, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    kept = secrets_dir / "garage.env"
+    _add_sharer(cfg, "twin", kept)
+    await mgr.reload()
+    await mgr.rename("garage", "carport")  # keeps garage.env: twin shares it
+    return mgr, registry, kept
+
+
+async def test_remove_reports_a_kept_secrets_file_nobody_uses(env):
+    mgr, _, kept = await _kept_file_setup(env)
+    assert "no longer used" not in await mgr.remove("twin")  # carport still uses it
+    result = await mgr.remove("carport")
+    assert (
+        f"; {kept} is no longer used by any camera; delete it by hand if you don't need it"
+        in result
+    )
+    assert kept.exists()
+
+
+async def test_delete_reports_a_kept_secrets_file_nobody_uses(env):
+    mgr, _, kept = await _kept_file_setup(env)
+    await mgr.remove("twin")
+    seen = []
+
+    async def confirm(message, targets):
+        seen.extend(targets)
+        return 0
+
+    result = await mgr.delete("carport", confirm)
+    assert f"keeps its secrets file {kept}, which no other camera uses" in seen[0]
+    assert f"{kept} is no longer used by any camera" in result
+    assert kept.exists()

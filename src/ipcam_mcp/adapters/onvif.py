@@ -24,6 +24,18 @@ log = logging.getLogger(__name__)
 _closing: set[asyncio.Task] = set()
 
 
+async def _close_client(cam: Any) -> None:
+    """Close an ONVIF client, best effort. Shielded: a cancelled caller does not leave the
+    session half closed (the close finishes in the background)."""
+    if not hasattr(cam, "close"):
+        return
+    with contextlib.suppress(Exception):
+        task = asyncio.ensure_future(cam.close())
+        _closing.add(task)
+        task.add_done_callback(_close_done)
+        await asyncio.shield(task)
+
+
 def _close_done(task: asyncio.Task) -> None:
     _closing.discard(task)
     if not task.cancelled() and task.exception() is not None:
@@ -100,9 +112,7 @@ async def _probe_port(
             ptz = False
         return DeviceInfo(str(info.Manufacturer), str(info.Model), ptz, port)
     finally:
-        if hasattr(cam, "close"):
-            with contextlib.suppress(Exception):
-                await cam.close()
+        await _close_client(cam)
 
 
 async def probe(
@@ -286,14 +296,9 @@ class OnvifCamera:
         async with self._connect_lock:
             cam, self._cam = self._cam, None
             self._reset_services()
-        if cam is not None and hasattr(cam, "close"):
-            # Shielded: a cancelled caller must not leave the session half closed, since the
-            # client is already dropped and a second aclose has nothing left to close.
-            task = asyncio.ensure_future(cam.close())
-            _closing.add(task)
-            task.add_done_callback(_close_done)
-            with contextlib.suppress(Exception):
-                await asyncio.shield(task)
+        if cam is not None:
+            # The client is already dropped, so a second aclose has nothing left to close.
+            await _close_client(cam)
 
     def _reset_services(self) -> None:
         pass

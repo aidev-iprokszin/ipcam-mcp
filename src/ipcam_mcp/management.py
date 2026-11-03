@@ -380,10 +380,8 @@ class Manager:
             # Under the camera lock, so a running capture does not write the old name back.
             note = ""
             if sharing:
-                note = (
-                    f"; its secrets file {old_path} is shared with '{sharing[0]}' and keeps its "
-                    "name"
-                )
+                names = ", ".join(f"'{other}'" for other in sharing)
+                note = f"; its secrets file {old_path} is shared with {names} and keeps its name"
             async with self._registry.lock(old):
                 await self._mutate(
                     lambda: config_writer.rename_section(self._config_path, old, new, updates),
@@ -489,6 +487,7 @@ class Manager:
             if cam_id not in config.devices:
                 raise ValueError(f"camera '{cam_id}' not found")
             owned = self._owned_secrets(cam_id, config.secrets_dir)
+            unused = self._unused_secrets(cam_id, config.secrets_dir)
 
             await self._mutate(lambda: config_writer.remove_section(self._config_path, cam_id))
             result = f"removed '{cam_id}'"
@@ -498,6 +497,8 @@ class Manager:
                     result += f" and deleted {owned}"
                 except OSError as exc:
                     result += f"; could not delete {owned}: {exc.strerror or exc}"
+            if unused is not None:
+                result += _unused_note(unused)
             folder = config.media_dir / config.devices[cam_id].uid
             if folder.is_dir():
                 result += f"; files kept in {folder}; delete_camera('{cam_id}') deletes them"
@@ -557,7 +558,13 @@ class Manager:
             meta = store.CameraMeta(dev.uid, name, datetime.now().astimezone())
             used = store.usage(folder, meta)
             owned = self._owned_secrets(name, config.secrets_dir)
-            extra = "config entry and its secrets file" if owned else "config entry"
+            unused = self._unused_secrets(name, config.secrets_dir)
+            if owned:
+                extra = "config entry and its secrets file"
+            elif unused:
+                extra = f"config entry; keeps its secrets file {unused}, which no other camera uses"
+            else:
+                extra = "config entry"
             targets.append(
                 _DeleteTarget(
                     dev.uid,
@@ -622,6 +629,7 @@ class Manager:
         holding its camera lock, so a running capture finishes first and a queued one finds
         nothing to write into. Returns (note on a secrets failure, paths left over)."""
         owned = self._owned_secrets(name, config.secrets_dir)
+        unused = self._unused_secrets(name, config.secrets_dir)
         async with self._registry.lock(name):
             await self._mutate(
                 lambda: config_writer.remove_section(self._config_path, name),
@@ -633,6 +641,8 @@ class Manager:
                     owned.unlink(missing_ok=True)
                 except OSError as exc:
                     note = f"could not delete {owned}: {exc.strerror or exc}"
+            if unused is not None:
+                note = _unused_note(unused).removeprefix("; ")
             left = store.delete_folder(config.media_dir, uid)
         await self._registry.close_retired()
         return note, left
@@ -682,6 +692,20 @@ class Manager:
         ):
             return path
         return None
+
+    def _unused_secrets(self, name: str, secrets_dir: Path) -> Path | None:
+        """The camera's secrets file if it lies in ``secrets_dir`` but is not its own
+        ``<name>.env`` (kept by a rename because cameras shared it), and no other camera uses
+        it. Such a file is not deleted: only ``<name>.env`` files are managed."""
+        sections = self._sections()
+        path = Path(sections[name]["secrets_file"]).expanduser().resolve()
+        if path.parent != secrets_dir.expanduser().resolve() or path.suffix != ".env":
+            return None
+        if self._is_managed(sections[name], secrets_dir / f"{name}.env"):
+            return None
+        if any(self._is_managed(spec, path) for other, spec in sections.items() if other != name):
+            return None
+        return path
 
     @staticmethod
     def _removed_named(config: AppConfig, name: str) -> bool:
@@ -735,6 +759,10 @@ class Manager:
             self._sync_loaded(config)
         if close_retired:
             await self._registry.close_retired()
+
+
+def _unused_note(path: Path) -> str:
+    return f"; {path} is no longer used by any camera; delete it by hand if you don't need it"
 
 
 @dataclass(frozen=True)
