@@ -355,3 +355,25 @@ def test_ensure_folder_read_error_keeps_meta(tmp_path, monkeypatch):
     monkeypatch.undo()
     assert (folder / "camera.json").read_text() == before
     assert _backups(folder) == []
+
+
+def test_ensure_folder_sets_aside_meta_of_other_camera(tmp_path):
+    folder = tmp_path / "aaaaaaaa"
+    write_meta(folder, CameraMeta("bbbbbbbb", "other", datetime(2025, 1, 1).astimezone()))
+    ensure_folder(tmp_path, "aaaaaaaa", "cam")
+    assert len(_backups(folder)) == 1
+    meta = read_meta(folder)
+    assert (meta.uid, meta.name) == ("aaaaaaaa", "cam")
+
+
+def test_enter_scene_back_keeps_predecessor(tmp_path):
+    ensure_folder(tmp_path, "aaaaaaaa", "cam")
+    enter_scene(tmp_path, "aaaaaaaa", "cam", "garage", continues="zzzzzzzz")
+    enter_scene(tmp_path, "aaaaaaaa", "cam", "cam")
+    meta = enter_scene(tmp_path, "aaaaaaaa", "cam", "garage")
+    assert [(p.scene, p.continues) for p in meta.scenes] == [
+        ("cam", None),
+        ("garage", "zzzzzzzz"),
+        ("cam", None),
+        ("garage", "zzzzzzzz"),
+    ]

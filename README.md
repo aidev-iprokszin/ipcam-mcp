@@ -58,7 +58,8 @@ its own there, `camera_compare` compares with the old camera's newest snapshot i
 baselines are looked up along the predecessors (up to 10). The result then says which camera
 took the reference, since angle, lens or resolution may differ. Without form support the camera
 is added as an additional one; call `set_scene` with its current scene later, from a client that
-shows forms, to declare it a successor. `delete_camera` mentions when a camera is another's
+shows forms, to declare it a successor. A camera that moves away and later returns to the
+scene keeps its predecessor there. `delete_camera` mentions when a camera is another's
 predecessor.
 
 ## Prerequisites

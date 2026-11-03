@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -72,8 +73,10 @@ class Registry:
                 known = ", ".join(sorted(self._adapters))
                 raise ConfigError(f"camera '{dev_id}': unknown type '{dev.type}'; known: {known}")
             current = self._devices.get(dev_id)
-            if current is not None and current[0] == dev and config.media_dir == self._media_dir:
-                devices[dev_id] = current
+            # A scene change alone keeps the adapter and its connection.
+            same = current is not None and replace(current[0], scene=dev.scene) == dev
+            if same and config.media_dir == self._media_dir:
+                devices[dev_id] = (dev, current[1])
             else:
                 devices[dev_id] = (dev, factory(dev, config.media_dir))
         return devices

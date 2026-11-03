@@ -55,8 +55,11 @@ def _created(captures: list[Path]) -> datetime:
     return datetime.strptime(min(stamps), "%Y%m%d-%H%M%S").astimezone()
 
 
-def migrate_flat_layout(media_dir: Path, configured: Mapping[str, str]) -> MigrationReport:
-    """Move old-style media into uid folders; ``configured`` maps camera name -> uid."""
+def migrate_flat_layout(
+    media_dir: Path, configured: Mapping[str, str], scenes: Mapping[str, str] | None = None
+) -> MigrationReport:
+    """Move old-style media into uid folders; ``configured`` maps camera name -> uid, and
+    ``scenes`` camera name -> scene (default: the name)."""
     report = MigrationReport()
     try:
         groups = _groups(media_dir)
@@ -75,7 +78,7 @@ def migrate_flat_layout(media_dir: Path, configured: Mapping[str, str]) -> Migra
     taken = existing | set(configured.values())
 
     try:
-        _migrate_groups(media_dir, configured, groups, earlier, taken, report)
+        _migrate_groups(media_dir, configured, scenes or {}, groups, earlier, taken, report)
     except OSError as e:  # stop; the rest stays in the old layout and is retried next start
         report.error = f"could not migrate {e.filename or media_dir}: {e.strerror or e}"
         return report
@@ -87,6 +90,7 @@ def migrate_flat_layout(media_dir: Path, configured: Mapping[str, str]) -> Migra
 def _migrate_groups(
     media_dir: Path,
     configured: Mapping[str, str],
+    scenes: Mapping[str, str],
     groups: dict[str, _Group],
     earlier: dict[str, str],
     taken: set[str],
@@ -102,7 +106,9 @@ def _migrate_groups(
             report.removed_cameras.append(name)
         folder = store.camera_dir(media_dir, uid)
         if store.meta_for_update(folder) is None:
-            store.write_meta(folder, store.CameraMeta(uid, name, _created(group.captures)))
+            created = _created(group.captures)
+            period = store.Period(scenes.get(name, name), created)
+            store.write_meta(folder, store.CameraMeta(uid, name, created, (period,)))
 
         moves = [(p, folder / p.name) for p in sorted(group.captures)]
         if group.baselines is not None:

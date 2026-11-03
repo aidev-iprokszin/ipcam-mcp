@@ -220,3 +220,11 @@ def test_list_has_scene_and_config(tmp_path):
     assert read_meta(reg.folder("cam")).current_scene == "front-door"
     with pytest.raises(DeviceError, match="camera 'nope' not found"):
         reg.config("nope")
+
+
+def test_reload_keeps_adapter_when_only_scene_changes():
+    reg = Registry(app(dev("cam")), adapters={"fake": FakeCamera})
+    adapter = reg.get("cam", "camera")
+    reg.reload(app(dataclasses.replace(dev("cam"), scene="porch")))
+    assert reg.get("cam", "camera") is adapter
+    assert reg.config("cam").scene == "porch"

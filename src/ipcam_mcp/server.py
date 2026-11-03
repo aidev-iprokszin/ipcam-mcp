@@ -568,7 +568,11 @@ def _is_loopback(host: str) -> bool:
 
 def _migrate(cfg: AppConfig) -> None:
     """Move media from the flat pre-uid layout into per-camera folders (once)."""
-    report = migrate_flat_layout(cfg.media_dir, {n: d.uid for n, d in cfg.devices.items()})
+    report = migrate_flat_layout(
+        cfg.media_dir,
+        {n: d.uid for n, d in cfg.devices.items()},
+        {n: d.scene or n for n, d in cfg.devices.items()},
+    )
     if report.moved:
         log.info(
             "migrated media of %d camera(s) to per-camera folders; %d removed camera(s) kept",

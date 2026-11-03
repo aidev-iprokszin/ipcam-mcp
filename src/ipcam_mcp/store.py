@@ -125,12 +125,15 @@ def read_meta(folder: Path) -> CameraMeta | None:
 
 
 def meta_for_update(folder: Path) -> CameraMeta | None:
-    """``camera.json`` read before writing it: None when there is none to keep. A corrupt one
-    is first renamed to ``camera.json.bad-<time>``; a read error (which may pass) raises, so a
-    good history is never replaced."""
+    """``camera.json`` read before writing it: None when there is none to keep. A corrupt one,
+    or one of another camera, is first renamed to ``camera.json.bad-<time>``; a read error
+    (which may pass) raises, so a good history is never replaced."""
     path = folder / META
     try:
-        return _parse_meta(path)
+        meta = _parse_meta(path)
+        if meta.uid != folder.name:
+            raise ValueError(f"uid {meta.uid} is not its folder's")
+        return meta
     except FileNotFoundError:
         return None
     except _CORRUPT as e:
@@ -211,7 +214,8 @@ def enter_scene(
     media_dir: Path, uid: str, name: str, scene: str, continues: str | None = None
 ) -> CameraMeta:
     """Record that the camera watches ``scene`` from now on (optionally as the successor of
-    ``continues``). Re-entering the current scene only sets ``continues`` on its period."""
+    ``continues``). Re-entering the current scene only sets ``continues`` on its period;
+    returning to an earlier scene keeps the predecessor it had there."""
     folder = ensure_folder(media_dir, uid, name, scene)
     meta = read_meta(folder)
     assert meta is not None  # ensure_folder just wrote it
@@ -221,12 +225,19 @@ def enter_scene(
             return meta
         periods = (*meta.scenes[:-1], replace(last, continues=continues))
     else:
+        if continues is None:
+            continues = earlier_predecessor(meta, scene)
         # Capture names have whole seconds: the new period starts at the next one, so a
         # capture taken in the second of the move stays with the old scene.
         periods = (*meta.scenes, Period(scene, _now() + timedelta(seconds=1), continues))
     meta = replace(meta, scenes=periods)
     write_meta(folder, meta)
     return meta
+
+
+def earlier_predecessor(meta: CameraMeta, scene: str) -> str | None:
+    """The predecessor the camera had the last time it was in ``scene``, if any."""
+    return next((p.continues for p in reversed(meta.scenes) if p.scene == scene), None)
 
 
 def usage(folder: Path, meta: CameraMeta) -> StoredCamera:

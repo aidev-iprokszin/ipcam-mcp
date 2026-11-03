@@ -177,3 +177,10 @@ def test_meta_read_error_is_reported_and_file_kept(tmp_path, monkeypatch):
     assert report.error is not None
     assert (m / U / "camera.json").read_bytes() == b"{}"
     assert not list((m / U).glob("camera.json.bad-*"))
+
+
+def test_migrated_folder_starts_in_configured_scene(tmp_path):
+    m = tmp_path / "media"
+    office_flat(m)
+    migrate_flat_layout(m, {"office": U}, scenes={"office": "desk"})
+    assert read_meta(m / U).current_scene == "desk"
