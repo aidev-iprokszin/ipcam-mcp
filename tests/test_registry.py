@@ -228,3 +228,41 @@ def test_reload_keeps_adapter_when_only_scene_changes():
     reg.reload(app(dataclasses.replace(dev("cam"), scene="porch")))
     assert reg.get("cam", "camera") is adapter
     assert reg.config("cam").scene == "porch"
+
+
+async def test_close_retired_cancelled_keeps_unclosed_adapters():
+    ClosableCamera.closed = []
+    reg = Registry(app(dev("a"), dev("b")), adapters={"fake": ClosableCamera})
+    async with reg.lock("a"):  # a capture is running on 'a'
+        reg.reload(app())
+        task = asyncio.create_task(reg.close_retired())
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert ClosableCamera.closed == []
+    await reg.close_retired()
+    assert ClosableCamera.closed == ["a", "b"]
+
+
+async def test_close_retired_cancelled_after_first_close():
+    closed: list[str] = []
+    release = asyncio.Event()
+
+    class SlowCamera(FakeCamera):
+        async def aclose(self):
+            if self.cfg.id == "b":
+                await release.wait()
+            closed.append(self.cfg.id)
+
+    reg = Registry(app(dev("a"), dev("b")), adapters={"fake": SlowCamera})
+    reg.reload(app())
+    task = asyncio.create_task(reg.close_retired())
+    await asyncio.sleep(0.01)
+    assert closed == ["a"]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    await reg.close_retired()
+    assert closed == ["a", "b"]
