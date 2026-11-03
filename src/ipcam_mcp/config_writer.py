@@ -23,6 +23,9 @@ def atomic_write(path: Path, data: str) -> None:
     A symlinked ``path`` stays a symlink: the file it points to is replaced.
     """
     target = Path(os.path.realpath(path))
+    if target.exists() and not os.access(target, os.W_OK):
+        # Replacing needs only a writable folder; a read-only file means "don't change me".
+        raise ConfigError(f"could not write {path}: it is read-only")
     tmp_name: str | None = None
     try:
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
