@@ -17,6 +17,7 @@ from mcp.shared.exceptions import MCPError
 from pydantic import BaseModel, Field, create_model
 
 from ipcam_mcp import baselines, scenes, store
+from ipcam_mcp.annotations import changes, read_only
 from ipcam_mcp.capabilities import PTZ, Amount, Direction, Quality
 from ipcam_mcp.config import AppConfig, config_path
 from ipcam_mcp.errors import ConfigError, DeviceError
@@ -198,7 +199,7 @@ def build_server(
     else:
         empty_hint = "No cameras configured. Add one to cameras.toml, then restart or reload."
 
-    @mcp.tool()
+    @mcp.tool(**read_only("List cameras"))
     async def list_cameras(include_removed: bool = False) -> str:
         """List configured cameras with their ids (names), uids, types and capabilities
         (camera, ptz). include_removed=true also lists removed cameras whose files are still
@@ -245,7 +246,7 @@ def build_server(
         preview = await make_preview(path)
         return [Image(data=preview, format="jpeg"), f"Saved full-size snapshot: {path}"]
 
-    @mcp.tool()
+    @mcp.tool(**changes("Take a snapshot", destructive=False, idempotent=False))
     async def camera_snapshot(
         camera: str | None = None,
         quality: Quality = "high",
@@ -287,7 +288,7 @@ def build_server(
 
         return await _guarded(run)
 
-    @mcp.tool()
+    @mcp.tool(**changes("Save a baseline snapshot", destructive=True, idempotent=False))
     async def camera_save_baseline(camera: str, name: str, quality: Quality = "high") -> list:
         """Take a snapshot and keep it as a named reference for camera_compare (e.g.
         'door-closed')."""
@@ -363,7 +364,7 @@ def build_server(
                 )
             return [Image(data=res.annotated, format="jpeg"), text]
 
-    @mcp.tool()
+    @mcp.tool(**changes("Compare with a previous snapshot", destructive=False, idempotent=False))
     async def camera_compare(
         camera: str, baseline: str | None = None, quality: Quality = "high"
     ) -> list:
@@ -374,7 +375,7 @@ def build_server(
 
     add_scene_tools(mcp, registry, snapshot_camera, compare_camera)
 
-    @mcp.tool()
+    @mcp.tool(**changes("Record a video clip", destructive=False, idempotent=False))
     async def camera_record(
         camera: str,
         seconds: Annotated[int, Field(ge=1, le=60)] = 10,
@@ -393,7 +394,7 @@ def build_server(
 
         return await with_camera(camera, "camera", op)
 
-    @mcp.tool()
+    @mcp.tool(**changes("Pan or tilt the camera", destructive=False, idempotent=False))
     async def ptz_move(camera: str, direction: Direction, amount: Amount = "small") -> str:
         """Pan or tilt a camera. Directions are as seen in the camera image ("left" turns the
         view left). amount: "small" is a slight nudge, "medium" a noticeable turn, "large" a big
@@ -408,7 +409,7 @@ def build_server(
 
         return await with_camera(camera, "ptz", op)
 
-    @mcp.tool()
+    @mcp.tool(**read_only("List PTZ presets"))
     async def ptz_list_presets(camera: str) -> str:
         """List the saved camera positions (presets) of a pan/tilt camera."""
 
@@ -418,7 +419,7 @@ def build_server(
 
         return await with_camera(camera, "ptz", op)
 
-    @mcp.tool()
+    @mcp.tool(**changes("Go to a PTZ preset", destructive=False, idempotent=True))
     async def ptz_goto_preset(camera: str, preset: str) -> str:
         """Move a pan/tilt camera to a saved preset, given by name or token."""
 
@@ -428,7 +429,7 @@ def build_server(
 
         return await with_camera(camera, "ptz", op)
 
-    @mcp.tool()
+    @mcp.tool(**changes("Save a PTZ preset", destructive=True, idempotent=False))
     async def ptz_save_preset(camera: str, name: str, overwrite: bool = False) -> str:
         """Save the camera's current position as a preset. Refuses an existing name unless
         overwrite=true."""
@@ -439,7 +440,7 @@ def build_server(
 
         return await with_camera(camera, "ptz", op)
 
-    @mcp.tool()
+    @mcp.tool(**changes("Remove a PTZ preset", destructive=True, idempotent=False))
     async def ptz_remove_preset(camera: str, preset: str) -> str:
         """Delete a saved preset by name or token. This cannot be undone."""
 
@@ -455,7 +456,7 @@ def build_server(
 
 
 def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bool) -> None:
-    @mcp.tool()
+    @mcp.tool(**changes("Reload cameras.toml", destructive=False, idempotent=True))
     async def reload_cameras() -> str:
         """Re-read cameras.toml after it was edited by hand and list the cameras, in the same
         format as list_cameras."""
@@ -464,7 +465,7 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
     if not allow_management:
         return
 
-    @mcp.tool()
+    @mcp.tool(**changes("Add a camera", destructive=False, idempotent=False))
     async def add_camera(
         name: str,
         host: str,
@@ -505,12 +506,12 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
 
         return await _guarded(run)
 
-    @mcp.tool()
+    @mcp.tool(**changes("Rename a camera", destructive=False, idempotent=False))
     async def rename_camera(old: str, new: str) -> str:
         """Change a camera's name. Its baselines, snapshots and recordings stay with it."""
         return await _guarded(lambda: manager.rename(old, new))
 
-    @mcp.tool()
+    @mcp.tool(**changes("Move a camera to a scene", destructive=False, idempotent=False))
     async def set_scene(camera: str, scene: str, ctx: Context) -> str:
         """Move a camera to another scene (the place it watches). Its earlier snapshots stay
         with the earlier scene; camera_compare only compares within the current scene.
@@ -522,13 +523,13 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
             lambda: manager.set_scene(camera, scene, _successor_prompt(ctx, scene))
         )
 
-    @mcp.tool()
+    @mcp.tool(**changes("Remove a camera from the config", destructive=True, idempotent=False))
     async def remove_camera(name: str) -> str:
         """Remove a camera from the configuration. Never deletes snapshots or recordings
         (delete_camera does, after the user approves)."""
         return await _guarded(lambda: manager.remove(name))
 
-    @mcp.tool()
+    @mcp.tool(**changes("Delete a camera and its files", destructive=True, idempotent=False))
     async def delete_camera(name: str, ctx: Context) -> str:
         """Delete a camera and all its snapshots, recordings and baselines, or the leftover
         files of a removed camera with that name. The user approves in a form that lists what
