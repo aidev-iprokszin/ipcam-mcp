@@ -1,0 +1,43 @@
+name: Bug report
+description: Something doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste IP addresses, usernames, passwords or RTSP URLs.** Error messages from
+        ipcam-mcp already hide credentials; please check anything else you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error message or log
+      render: text
+  - type: input
+    id: camera
+    attributes:
+      label: Camera brand and model
+      placeholder: e.g. TP-Link Tapo TC70
+    validations:
+      required: true
+  - type: dropdown
+    id: type
+    attributes:
+      label: Config type
+      options: [onvif, tapo_onvif]
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: ipcam-mcp version, OS (Linux / WSL2), MCP client.
+      placeholder: e.g. v0.2.0, WSL2 Ubuntu 24.04, Claude Code
+    validations:
+      required: true
