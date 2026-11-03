@@ -17,7 +17,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
 from pydantic import BaseModel, Field, create_model
 
-from ipcam_mcp import baselines, store
+from ipcam_mcp import baselines, scenes, store
 from ipcam_mcp.capabilities import PTZ, Amount, Direction, Quality
 from ipcam_mcp.config import AppConfig, config_path
 from ipcam_mcp.errors import CameraMcpError, ConfigError, DeviceError
@@ -157,6 +157,14 @@ def build_server(
 ) -> MCPServer:
     mcp = MCPServer("ipcam-mcp", instructions=INSTRUCTIONS)
 
+    def _scene_meta(camera: str) -> tuple[Path, store.CameraMeta]:
+        """The camera's folder and camera.json (its scene periods)."""
+        folder = registry.folder(camera)  # writes a missing or unreadable camera.json
+        meta = store.read_meta(folder)
+        if meta is None:
+            raise DeviceError(f"{camera}: cannot read {folder / store.META}")
+        return folder, meta
+
     async def with_camera(camera: str, capability: str, op: Callable[[Any], Awaitable[Any]]):
         async def run():
             registry.get(camera, capability)  # fail fast for unknown cameras
@@ -263,7 +271,8 @@ def build_server(
                 baselines.check_name(name)
                 path = await adapter.snapshot(quality)
                 pos = await _position(adapter) if isinstance(adapter, PTZ) else None
-                baselines.save_baseline(registry.folder(camera), name, path, quality, pos)
+                folder, meta = _scene_meta(camera)
+                baselines.save_baseline(folder, name, path, quality, pos, meta.current_scene)
                 data, _ = crop_jpeg(path, None)
                 return [
                     Image(data=data, format="jpeg"),
@@ -286,15 +295,16 @@ def build_server(
                 # Again under the lock: the camera may have been removed or replaced
                 # while this call waited (delete/remove/rename_camera, reload).
                 adapter = registry.get(camera, "camera")
+                folder, meta = _scene_meta(camera)
                 base = None
                 if baseline is not None:
-                    base = baselines.load_baseline(registry.folder(camera), baseline)
+                    base = scenes.load_scene_baseline(folder, meta, meta.current_scene, baseline)
                     ref_path = base.path
                     label = f"baseline '{baseline}'"
                     age = datetime.now().astimezone() - base.taken
                     age_s = age.total_seconds()
                 else:
-                    ref_path = baselines.latest_snapshot(registry.folder(camera))
+                    ref_path = scenes.latest_in_scene(folder, meta, meta.current_scene)
                     if ref_path is None:
                         raise ValueError(
                             f"no previous snapshot of '{camera}' to compare with; "

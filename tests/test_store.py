@@ -266,3 +266,13 @@ def test_enter_scene_continues_on_current_scene_updates_last_period(tmp_path):
     ensure_folder(tmp_path, "aaaaaaaa", "cam", scene="garage")
     meta = enter_scene(tmp_path, "aaaaaaaa", "cam", "garage", continues="bbbbbbbb")
     assert len(meta.scenes) == 1 and meta.scenes[0].continues == "bbbbbbbb"
+
+
+def test_enter_scene_starts_at_next_second(tmp_path, monkeypatch):
+    """Capture names have whole seconds: a capture in the second of the move stays with the
+    old scene, so a compare in the new scene never uses a frame of the old place."""
+    ensure_folder(tmp_path, "aaaaaaaa", "cam", scene="garage")
+    now = datetime(2026, 11, 3, 13, 0, 5).astimezone()
+    monkeypatch.setattr(store, "_now", lambda: now)
+    meta = enter_scene(tmp_path, "aaaaaaaa", "cam", "front-door")
+    assert meta.scenes[-1].since == datetime(2026, 11, 3, 13, 0, 6).astimezone()

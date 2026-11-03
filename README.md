@@ -10,10 +10,10 @@ Any ONVIF camera should work. See [known cameras](docs/cameras/) for what has be
 
 | Tool | What it does |
 |---|---|
-| `list_cameras(include_removed=False)` | Configured cameras with their uid and capabilities (`camera`, `ptz`); `include_removed=true` also lists removed cameras whose files are still on disk |
+| `list_cameras(include_removed=False)` | Configured cameras with their uid, scene and capabilities (`camera`, `ptz`); `include_removed=true` also lists removed cameras whose files are still on disk |
 | `camera_snapshot(camera, quality="high", crop=None, region=None, from_path=None)` | Returns the picture (≤1280 px wide) and saves the full-size JPEG. `crop=[x, y, w, h]` (fractions 0–1) or `region` (`top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`) returns a detail at full resolution. `from_path` crops an earlier snapshot without contacting the camera |
 | `camera_save_baseline(camera, name, quality="high")` | Takes a snapshot and keeps it as a named reference (e.g. `door-closed`) |
-| `camera_compare(camera, baseline=None, quality="high")` | Takes a snapshot and reports what changed against the previous snapshot, or against a named baseline |
+| `camera_compare(camera, baseline=None, quality="high")` | Takes a snapshot and reports what changed against the camera's previous snapshot in its current scene, or against a named baseline saved in that scene |
 | `camera_record(camera, seconds=10, quality="high")` | Records 1–60 s to an mp4, returns its path |
 | `ptz_move(camera, direction, amount="small")` | Pan/tilt `left/right/up/down` by `small/medium/large`; waits for the move to finish and returns the final position if the camera reports one |
 | `ptz_list_presets(camera)` | Saved positions |
@@ -39,6 +39,13 @@ snapshots and baselines, and a new camera that reuses an old name starts with an
 When you upgrade from 0.2, the first start moves existing snapshots, recordings and baselines
 from the old flat layout into these folders; files of cameras that are no longer configured get
 a folder of their own and are kept.
+
+**Scenes.** A scene is the place a camera watches, such as `front-door` or `garage`. By default
+it is the camera's name; set `scene = "..."` in the camera's section (or use `set_scene`) when
+they differ, for example when several cameras watch one place. Renaming a camera keeps its
+scene. Moving a camera to another scene starts a new period in its `camera.json`: snapshots and
+baselines from before the move stay with the old scene, and `camera_compare` only compares within
+the current one, so it never reports a different place as a change.
 
 ## Prerequisites
 
@@ -147,8 +154,9 @@ agent picked up elsewhere.
 
 | Tool | What it does |
 |---|---|
-| `add_camera(name, host, credentials_via="form", onvif_port=None)` | Verifies the login over ONVIF (tries port 80, then 2020, unless you give `onvif_port`), detects pan/tilt, then adds the camera with a new uid. `name` is lowercase letters, digits, `-`, `_` (max 32) |
-| `rename_camera(old, new)` | Changes a camera's name; its uid, baselines, snapshots and recordings stay with it (no files move), and its secrets file is renamed too if the tool created it |
+| `add_camera(name, host, credentials_via="form", onvif_port=None, scene=None)` | Verifies the login over ONVIF (tries port 80, then 2020, unless you give `onvif_port`), detects pan/tilt, then adds the camera with a new uid. `name` and `scene` are lowercase letters, digits, `-`, `_` (max 32); `scene` defaults to the name |
+| `rename_camera(old, new)` | Changes a camera's name; its uid, scene, baselines, snapshots and recordings stay with it (no files move), and its secrets file is renamed too if the tool created it |
+| `set_scene(camera, scene)` | Moves a camera to another scene (the place it watches). Earlier snapshots and baselines stay with the earlier scene |
 | `remove_camera(name)` | Removes the camera from the config; keeps its snapshots, recordings and baselines (it becomes a *removed camera*) |
 | `delete_camera(name)` | Deletes the camera (config entry, its managed secrets file) and its folder with all snapshots, recordings and baselines, or the leftover folder of a removed camera with that name. **You** approve it in a form listing what will be deleted; with several matches you pick one or all. Without form support nothing is deleted and the result says what to delete by hand |
 | `reload_cameras()` | Always available. Re-reads `cameras.toml` after a manual edit and lists the cameras |

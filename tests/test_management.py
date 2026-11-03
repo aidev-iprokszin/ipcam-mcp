@@ -11,7 +11,6 @@ from dotenv import dotenv_values
 
 from ipcam_mcp import store
 from ipcam_mcp.adapters.onvif import DeviceInfo
-from ipcam_mcp.baselines import latest_snapshot
 from ipcam_mcp.config import load_config
 from ipcam_mcp.errors import ConfigError, DeviceError
 from ipcam_mcp.management import (
@@ -22,6 +21,7 @@ from ipcam_mcp.management import (
     validate_id,
 )
 from ipcam_mcp.registry import Registry
+from ipcam_mcp.scenes import latest_in_scene
 from ipcam_mcp.store import UID_PATTERN, CameraMeta, read_meta, write_meta
 
 USER = "camuser"
@@ -646,7 +646,10 @@ async def test_rename_moves_no_files_and_updates_meta(env):
     assert result == "renamed 'office' to 'front'"
     assert read_meta(folder).name == "front"  # before registry.folder() could rewrite it
     assert registry.folder("front") == folder
-    assert latest_snapshot(folder) == folder / "office_20261103-111200.jpg"
+    meta = read_meta(folder)
+    assert (
+        latest_in_scene(folder, meta, meta.current_scene) == folder / "office_20261103-111200.jpg"
+    )
     assert sorted(p.name for p in folder.parent.iterdir()) == [uid_for("office")]
 
 

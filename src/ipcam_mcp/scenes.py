@@ -10,6 +10,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from ipcam_mcp import baselines
+from ipcam_mcp.baselines import Baseline
 from ipcam_mcp.store import CameraMeta, Period
 
 _CAPTURE_RE = re.compile(r"^.+_(\d{8}-\d{6})(?:-(\d+))?\.(jpg|mp4)$")
@@ -71,3 +73,30 @@ def latest_in_scene(folder: Path, meta: CameraMeta, scene: str) -> Path | None:
     """The camera's newest snapshot taken in ``scene``."""
     found = _captures(folder, meta, scene, ("jpg",))
     return found[0][2] if found else None
+
+
+def _baseline_scene(meta: CameraMeta, base: Baseline) -> str:
+    # Baselines saved before scenes existed belong to the scene of the time they were taken.
+    return base.scene or period_at(meta, base.taken).scene
+
+
+def baselines_in_scene(folder: Path, meta: CameraMeta, scene: str) -> list[str]:
+    """Names of the camera's baselines saved in ``scene``."""
+    found = []
+    for name in baselines.list_baselines(folder):
+        try:
+            base = baselines.load_baseline(folder, name)
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            continue  # unreadable: not usable either
+        if _baseline_scene(meta, base) == scene:
+            found.append(name)
+    return found
+
+
+def load_scene_baseline(folder: Path, meta: CameraMeta, scene: str, name: str) -> Baseline:
+    """The baseline ``name``, if it was saved in ``scene``."""
+    baselines.check_name(name)
+    usable = baselines_in_scene(folder, meta, scene)
+    if name not in usable:
+        raise ValueError(f"baseline '{name}' not found; available: {', '.join(usable) or 'none'}")
+    return baselines.load_baseline(folder, name)

@@ -17,7 +17,7 @@ import string
 import tempfile
 from collections.abc import Collection
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 UID_PATTERN = r"^[a-z0-9]{8}$"
@@ -182,7 +182,9 @@ def enter_scene(
             return meta
         periods = (*meta.scenes[:-1], replace(last, continues=continues))
     else:
-        periods = (*meta.scenes, Period(scene, _now(), continues))
+        # Capture names have whole seconds: the new period starts at the next one, so a
+        # capture taken in the second of the move stays with the old scene.
+        periods = (*meta.scenes, Period(scene, _now() + timedelta(seconds=1), continues))
     meta = replace(meta, scenes=periods)
     write_meta(folder, meta)
     return meta

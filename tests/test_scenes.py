@@ -1,6 +1,16 @@
+import json
 from datetime import datetime
 
-from ipcam_mcp.scenes import capture_time, captures_in_scene, latest_in_scene, period_at
+import pytest
+
+from ipcam_mcp.scenes import (
+    baselines_in_scene,
+    capture_time,
+    captures_in_scene,
+    latest_in_scene,
+    load_scene_baseline,
+    period_at,
+)
 from ipcam_mcp.store import CameraMeta, Period
 
 T0 = datetime(2026, 1, 10, 9, 0).astimezone()
@@ -53,3 +63,38 @@ def test_latest_in_scene_counter_order_and_empty_skip(tmp_path):
     assert latest_in_scene(tmp_path, META, "front-door") == want
     assert latest_in_scene(tmp_path, META, "elsewhere") is None
     assert latest_in_scene(tmp_path / "missing", META, "front-door") is None
+
+
+def test_latest_in_scene_ignores_name_prefix(tmp_path):
+    """A uid folder holds captures taken under earlier names too (renames)."""
+    put(tmp_path, "office_20261103-100000.jpg")
+    want = put(tmp_path, "study_20261103-110000.jpg")
+    put(tmp_path, "office_20261103-115959.mp4")
+    put(tmp_path, "notes_x.jpg")
+    assert latest_in_scene(tmp_path, META, "garage") == want
+    assert latest_in_scene(tmp_path / "missing", META, "garage") is None
+
+
+def baseline(folder, name, taken, scene=None):
+    d = folder / "baselines"
+    put(d, f"{name}.jpg")
+    data = {"taken": taken.isoformat(), "quality": "high", "position": None}
+    if scene is not None:
+        data["scene"] = scene
+    (d / f"{name}.json").write_text(json.dumps(data))
+
+
+def test_baselines_in_scene_legacy_uses_period(tmp_path):
+    baseline(tmp_path, "old", datetime(2026, 5, 1).astimezone())  # legacy: no scene, garage era
+    baseline(tmp_path, "new", datetime(2026, 11, 4).astimezone())  # legacy: front-door era
+    baseline(tmp_path, "tagged", datetime(2026, 11, 4).astimezone(), scene="garage")
+    assert baselines_in_scene(tmp_path, META, "garage") == ["old", "tagged"]
+    assert baselines_in_scene(tmp_path, META, "front-door") == ["new"]
+
+
+def test_load_scene_baseline_ignores_other_scene(tmp_path):
+    baseline(tmp_path, "door", T1, scene="garage")
+    baseline(tmp_path, "gate", T1, scene="front-door")
+    assert load_scene_baseline(tmp_path, META, "front-door", "gate").name == "gate"
+    with pytest.raises(ValueError, match=r"baseline 'door' not found; available: gate$"):
+        load_scene_baseline(tmp_path, META, "front-door", "door")
