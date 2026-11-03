@@ -13,9 +13,10 @@ import os
 import re
 import tomllib
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import dotenv_values
 
@@ -40,6 +41,8 @@ class Credentials:
 
 
 CredentialPrompt = Callable[[str], Awaitable[Credentials | None]]
+# (message, one description per target) -> index of the chosen target, "all", or None (cancel)
+DeletePrompt = Callable[[str, list[str]], Awaitable[int | Literal["all"] | None]]
 Prober = Callable[[str, str, str, int | None], Awaitable[DeviceInfo]]
 
 
@@ -217,22 +220,140 @@ class Manager:
             config = self._load(self._config_path)
             if cam_id not in config.devices:
                 raise ValueError(f"camera '{cam_id}' not found")
-            sections = self._sections()
-            managed = config.secrets_dir / f"{cam_id}.env"
-            delete = self._is_managed(sections[cam_id], managed) and not any(
-                self._is_managed(spec, managed)
-                for other, spec in sections.items()
-                if other != cam_id
-            )
+            owned = self._owned_secrets(cam_id, config.secrets_dir)
 
             await self._mutate(lambda: config_writer.remove_section(self._config_path, cam_id))
-            if delete:
+            result = f"removed '{cam_id}'"
+            if owned is not None:
                 try:
-                    managed.unlink(missing_ok=True)
+                    owned.unlink(missing_ok=True)
+                    result += f" and deleted {owned}"
                 except OSError as exc:
-                    return f"removed '{cam_id}'; could not delete {managed}: {exc.strerror or exc}"
-                return f"removed '{cam_id}' and deleted {managed}"
-            return f"removed '{cam_id}'"
+                    result += f"; could not delete {owned}: {exc.strerror or exc}"
+            folder = config.media_dir / config.devices[cam_id].uid
+            if folder.is_dir():
+                result += f"; files kept in {folder}; delete_camera('{cam_id}') deletes them"
+            return result
+
+    async def removed(self) -> list[store.StoredCamera]:
+        """Removed cameras whose files are still in media_dir."""
+        async with self._lock:
+            config = self._load(self._config_path)
+            return store.removed_cameras(config.media_dir, {d.uid for d in config.devices.values()})
+
+    async def delete(self, name: str, confirm: DeletePrompt | None) -> str:
+        """Delete the configured camera ``name`` and/or removed cameras of that name, with their
+        files, once the user approves through ``confirm``. Without it nothing happens."""
+        async with self._lock:
+            config = self._load(self._config_path)
+            targets = self._delete_targets(config, name)
+            if not targets:
+                raise ValueError(f"no camera or leftover files named '{name}'")
+            if confirm is None:
+                return self._delete_by_hand(name, targets)
+            if len(targets) == 1:
+                message = f"Delete '{name}' and its files? This cannot be undone."
+            else:
+                message = (
+                    f"Several cameras named '{name}' have files. Which should be deleted? "
+                    "This cannot be undone."
+                )
+            choice = await confirm(message, [t.description for t in targets])
+            if choice is None:
+                return "cancelled; nothing was deleted"
+            chosen = targets if choice == "all" else [targets[choice]]
+
+            files = 0
+            left: list[Path] = []
+            notes: list[str] = []
+            for target in chosen:
+                files += target.files
+                if target.configured:
+                    note, gone = await self._drop_configured(name, config, target.uid)
+                    left += gone
+                    if note:
+                        notes.append(note)
+                else:
+                    left += store.delete_folder(config.media_dir, target.uid)
+            result = f"deleted '{name}' ({files} file{'s' * (files != 1)})"
+            if left:
+                shown = ", ".join(str(p) for p in left[:5]) + (" …" if len(left) > 5 else "")
+                result += f"; could not delete: {shown}"
+            return "; ".join([result, *notes])
+
+    def _delete_targets(self, config: AppConfig, name: str) -> list["_DeleteTarget"]:
+        targets = []
+        dev = config.devices.get(name)
+        if dev is not None:
+            folder = store.check_deletable(config.media_dir, dev.uid)
+            meta = store.CameraMeta(dev.uid, name, datetime.now().astimezone())
+            used = store.usage(folder, meta)
+            owned = self._owned_secrets(name, config.secrets_dir)
+            extra = "config entry and its secrets file" if owned else "config entry"
+            targets.append(
+                _DeleteTarget(
+                    dev.uid,
+                    True,
+                    f"{name} (configured): {_counts(used)}; {extra}",
+                    folder,
+                    _files(folder),
+                )
+            )
+        configured = {d.uid for d in config.devices.values()}
+        for used in store.removed_cameras(config.media_dir, configured):
+            if used.name == name:
+                store.check_deletable(config.media_dir, used.uid)
+                added = used.created.date().isoformat()
+                targets.append(
+                    _DeleteTarget(
+                        used.uid,
+                        False,
+                        f"{name} (removed, added {added}): {_counts(used)}",
+                        used.folder,
+                        _files(used.folder),
+                    )
+                )
+        labels = [t.description for t in targets]
+        return [
+            replace(t, description=f"{t.description} [{t.uid}]")
+            if labels.count(t.description) > 1
+            else t
+            for t in targets
+        ]
+
+    def _delete_by_hand(self, name: str, targets: list["_DeleteTarget"]) -> str:
+        steps = []
+        if any(t.configured for t in targets):
+            steps.append(
+                f"remove the [cameras.{name}] section from {self._config_path} (or call remove_camera)"
+            )
+        steps.append("delete " + ", ".join(str(t.folder) for t in targets))
+        return (
+            "This client can't show the approval form, so nothing was deleted. "
+            "To delete it by hand: " + "; then ".join(steps)
+        )
+
+    async def _drop_configured(
+        self, name: str, config: AppConfig, uid: str
+    ) -> tuple[str | None, list[Path]]:
+        """Remove ``name`` from the config, its managed secrets file and its folder while
+        holding its camera lock, so a running capture finishes first and a queued one finds
+        nothing to write into. Returns (note on a secrets failure, paths left over)."""
+        owned = self._owned_secrets(name, config.secrets_dir)
+        async with self._registry.lock(name):
+            await self._mutate(
+                lambda: config_writer.remove_section(self._config_path, name),
+                close_retired=False,  # needs the camera lock held here
+            )
+            note = None
+            if owned is not None:
+                try:
+                    owned.unlink(missing_ok=True)
+                except OSError as exc:
+                    note = f"could not delete {owned}: {exc.strerror or exc}"
+            left = store.delete_folder(config.media_dir, uid)
+        await self._registry.close_retired()
+        return note, left
 
     async def reload(self) -> list[dict]:
         async with self._lock:
@@ -267,6 +388,16 @@ class Manager:
         except FileNotFoundError:
             return {}
         return tomllib.loads(text).get("cameras", {})
+
+    def _owned_secrets(self, name: str, secrets_dir: Path) -> Path | None:
+        """``<secrets_dir>/<name>.env`` if this camera's section uses it and no other does."""
+        path = secrets_dir / f"{name}.env"
+        sections = self._sections()
+        if self._is_managed(sections[name], path) and not any(
+            self._is_managed(spec, path) for other, spec in sections.items() if other != name
+        ):
+            return path
+        return None
 
     @staticmethod
     def _removed_named(config: AppConfig, name: str) -> bool:
@@ -316,3 +447,30 @@ class Manager:
             raise
         if close_retired:
             await self._registry.close_retired()
+
+
+@dataclass(frozen=True)
+class _DeleteTarget:
+    uid: str
+    configured: bool
+    description: str
+    folder: Path
+    files: int
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'s' * (n != 1)}"
+
+
+def _counts(used: store.StoredCamera) -> str:
+    return (
+        f"{_plural(used.snapshots, 'snapshot')}, {_plural(used.recordings, 'recording')}, "
+        f"{_plural(used.baselines, 'baseline')}, {used.size / 1_000_000:.1f} MB"
+    )
+
+
+def _files(folder: Path) -> int:
+    try:
+        return sum(1 for p in folder.rglob("*") if p.is_file() and p.name != store.META)
+    except OSError:
+        return 0

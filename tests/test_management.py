@@ -676,3 +676,202 @@ def test_prepare_config_warns_about_detached_history(env, caplog):
     with caplog.at_level("WARNING", logger="ipcam_mcp"):
         prepare_config(cfg)
     assert "zzzzzzzz" in caplog.text and 'uid = "zzzzzzzz"' in caplog.text
+
+
+# --- delete_camera ---
+
+
+def choosing(answer):
+    calls: list[tuple[str, list[str]]] = []
+
+    async def confirm(message: str, targets: list[str]):
+        calls.append((message, targets))
+        return answer
+
+    confirm.calls = calls
+    return confirm
+
+
+def removed_folder(cfg: Path, uid: str, name: str, created=datetime(2025, 1, 1)) -> Path:
+    folder = cfg.parent / "media" / uid
+    write_meta(folder, CameraMeta(uid, name, created.astimezone()))
+    (folder / f"{name}_20250101-000000.jpg").write_bytes(b"x" * 2_000_000)
+    return folder
+
+
+async def test_delete_configured_camera(env):
+    cfg, secrets_dir, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    folder = registry.folder("garage")
+    (folder / "garage_20261103-111200.jpg").write_bytes(b"x")
+    confirm = choosing(0)
+
+    result = await mgr.delete("garage", confirm)
+
+    assert result.startswith("deleted 'garage'")
+    assert not folder.exists()
+    assert not (secrets_dir / "garage.env").exists()
+    assert "[cameras.garage]" not in cfg.read_text()
+    assert ids(registry) == ["office"]
+    assert len(confirm.calls[0][1]) == 1
+
+
+async def test_delete_removed_camera(env):
+    cfg, _, _ = env
+    folder = removed_folder(cfg, "zzzzzzzz", "garage")
+    before = cfg.read_bytes()
+    mgr, registry, _ = make_manager(cfg)
+
+    result = await mgr.delete("garage", choosing(0))
+
+    assert result.startswith("deleted 'garage'")
+    assert not folder.exists()
+    assert cfg.read_bytes() == before
+    assert ids(registry) == ["office"]
+
+
+async def test_delete_description_text(env):
+    cfg, _, _ = env
+    removed_folder(cfg, "zzzzzzzz", "office")
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    (folder / "office_20261103-111200.jpg").write_bytes(b"x" * 1_500_000)
+    (folder / "office_20261103-111300.mp4").write_bytes(b"x")
+    confirm = choosing(None)
+
+    await mgr.delete("office", confirm)
+
+    message, targets = confirm.calls[0]
+    assert "cannot be undone" in message
+    assert targets == [
+        "office (configured): 1 snapshot, 1 recording, 0 baselines, 1.5 MB; config entry",
+        "office (removed, added 2025-01-01): 1 snapshot, 0 recordings, 0 baselines, 2.0 MB",
+    ]
+
+
+async def test_delete_several_choose_one(env):
+    cfg, _, _ = env
+    first = removed_folder(cfg, "yyyyyyyy", "garage", datetime(2025, 1, 1))
+    second = removed_folder(cfg, "zzzzzzzz", "garage", datetime(2025, 2, 1))
+    mgr, _, _ = make_manager(cfg)
+    await mgr.delete("garage", choosing(1))
+    assert first.exists() and not second.exists()
+
+
+async def test_delete_several_all(env):
+    cfg, _, _ = env
+    first = removed_folder(cfg, "yyyyyyyy", "office")
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    await mgr.delete("office", choosing("all"))
+    assert not first.exists() and not folder.exists()
+    assert ids(registry) == []
+
+
+async def test_delete_cancelled_changes_nothing(env):
+    cfg, _, _ = env
+    folder = removed_folder(cfg, "zzzzzzzz", "garage")
+    before = cfg.read_bytes()
+    mgr, registry, _ = make_manager(cfg)
+    assert await mgr.delete("office", choosing(None)) == "cancelled; nothing was deleted"
+    assert await mgr.delete("garage", choosing(None)) == "cancelled; nothing was deleted"
+    assert folder.exists() and cfg.read_bytes() == before and ids(registry) == ["office"]
+
+
+async def test_delete_without_form_returns_instructions(env):
+    cfg, _, _ = env
+    folder = removed_folder(cfg, "zzzzzzzz", "office")
+    before = cfg.read_bytes()
+    mgr, registry, _ = make_manager(cfg)
+
+    result = await mgr.delete("office", None)
+
+    assert "nothing was deleted" in result
+    assert str(folder) in result and str(cfg.parent / "media" / uid_for("office")) in result
+    assert "[cameras.office]" in result
+    assert folder.exists() and cfg.read_bytes() == before and ids(registry) == ["office"]
+
+
+async def test_delete_unknown_name(env):
+    cfg, _, _ = env
+    mgr, _, _ = make_manager(cfg)
+    with pytest.raises(ValueError, match="no camera or leftover files named 'nope'"):
+        await mgr.delete("nope", choosing(0))
+
+
+async def test_delete_partial_failure_lists_leftovers(env, monkeypatch):
+    cfg, _, _ = env
+    folder = removed_folder(cfg, "zzzzzzzz", "garage")
+    stuck = folder / "garage_20250101-000000.jpg"
+    monkeypatch.setattr(store, "delete_folder", lambda media, uid: [stuck])
+    mgr, _, _ = make_manager(cfg)
+    result = await mgr.delete("garage", choosing(0))
+    assert "could not delete" in result and str(stuck) in result
+
+
+async def test_delete_waits_for_running_capture(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    order: list[str] = []
+
+    async def capture():
+        async with registry.lock("office"):
+            await asyncio.sleep(0.05)
+            (folder / "office_20261103-111300.jpg").write_bytes(b"jpg")
+            order.append("capture done")
+
+    task = asyncio.create_task(capture())
+    await asyncio.sleep(0)
+    await mgr.delete("office", choosing(0))
+    order.append("deleted")
+    await task
+    assert order == ["capture done", "deleted"]
+    assert not folder.exists()
+
+
+async def test_remove_result_points_to_delete_camera(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    result = await mgr.remove("office")
+    assert f"files kept in {folder}" in result
+    assert "delete_camera('office') deletes them" in result
+    assert folder.exists()
+
+
+async def test_removed_lists_leftovers(env):
+    cfg, _, _ = env
+    removed_folder(cfg, "zzzzzzzz", "garage")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    assert [(c.uid, c.name) for c in await mgr.removed()] == [("zzzzzzzz", "garage")]
+
+
+async def test_delete_identical_targets_get_distinct_labels(env):
+    cfg, _, _ = env
+    removed_folder(cfg, "yyyyyyyy", "garage")
+    removed_folder(cfg, "zzzzzzzz", "garage")
+    confirm = choosing(None)
+    mgr, _, _ = make_manager(cfg)
+    await mgr.delete("garage", confirm)
+    targets = confirm.calls[0][1]
+    assert len(set(targets)) == 2
+    assert targets[0].endswith("[yyyyyyyy]") and targets[1].endswith("[zzzzzzzz]")
+
+
+async def test_delete_refuses_symlinked_folder_before_changing_anything(env, tmp_path):
+    cfg, _, _ = env
+    elsewhere = tmp_path / "disk2"
+    elsewhere.mkdir()
+    media = cfg.parent / "media"
+    media.mkdir(exist_ok=True)
+    (media / uid_for("office")).symlink_to(elsewhere)
+    before = cfg.read_bytes()
+    confirm = choosing(0)
+    mgr, registry, _ = make_manager(cfg)
+    with pytest.raises(ValueError, match="symlink"):
+        await mgr.delete("office", confirm)
+    assert confirm.calls == []  # refused before asking
+    assert cfg.read_bytes() == before and ids(registry) == ["office"]

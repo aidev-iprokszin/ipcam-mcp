@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import string
 import tempfile
 from collections.abc import Collection
@@ -31,6 +32,23 @@ class CameraMeta:
     uid: str
     name: str
     created: datetime
+
+
+@dataclass(frozen=True)
+class StoredCamera:
+    """A camera folder and what it holds."""
+
+    uid: str
+    name: str
+    created: datetime
+    folder: Path
+    snapshots: int
+    recordings: int
+    baselines: int
+    size: int
+
+
+_CAPTURE_RE = re.compile(r"^.+_\d{8}-\d{6}(?:-\d+)?\.(jpg|mp4)$")
 
 
 def is_uid(text: str) -> bool:
@@ -99,3 +117,81 @@ def ensure_folder(media_dir: Path, uid: str, name: str) -> Path:
     elif meta.name != name:
         write_meta(folder, CameraMeta(uid, name, meta.created))
     return folder
+
+
+def usage(folder: Path, meta: CameraMeta) -> StoredCamera:
+    snapshots = recordings = baselines = size = 0
+    with contextlib.suppress(OSError):
+        for p in folder.iterdir():
+            if p.is_file() and (m := _CAPTURE_RE.match(p.name)):
+                snapshots += m[1] == "jpg"
+                recordings += m[1] == "mp4"
+        b = folder / "baselines"
+        if b.is_dir():
+            baselines = sum(1 for j in b.glob("*.json") if (b / f"{j.stem}.jpg").is_file())
+        size = sum(
+            p.stat().st_size for p in folder.rglob("*") if p.is_file() and not p.is_symlink()
+        )
+    return StoredCamera(
+        meta.uid, meta.name, meta.created, folder, snapshots, recordings, baselines, size
+    )
+
+
+def removed_cameras(media_dir: Path, configured_uids: Collection[str]) -> list[StoredCamera]:
+    """Camera folders with a readable ``camera.json`` whose uid is not configured."""
+    found = []
+    for uid in sorted(folder_names(media_dir) - set(configured_uids)):
+        if not is_uid(uid):
+            continue
+        folder = media_dir / uid
+        meta = read_meta(folder)
+        if meta is not None and meta.uid == uid:
+            found.append(usage(folder, meta))
+    return sorted(found, key=lambda c: c.created)
+
+
+def check_deletable(media_dir: Path, uid: str) -> Path:
+    """The camera's folder, if it may be deleted: a real directory directly inside
+    ``media_dir`` (``media_dir`` itself may be a symlink, e.g. to another disk)."""
+    folder = camera_dir(media_dir, uid)
+    if folder.is_symlink():
+        raise ValueError(f"refusing to delete {folder}: it is a symlink; delete it by hand")
+    if folder.exists() and (not folder.is_dir() or folder.resolve().parent != media_dir.resolve()):
+        raise ValueError(f"refusing to delete {folder}: not a camera folder in {media_dir}")
+    return folder
+
+
+def delete_folder(media_dir: Path, uid: str) -> list[Path]:
+    """Delete ``<media_dir>/<uid>``; returns the paths that could not be deleted.
+
+    ``camera.json`` goes last, so a folder with leftovers is still listed as a removed camera
+    and can be deleted again later.
+    """
+    folder = check_deletable(media_dir, uid)
+    if not folder.exists():
+        return []
+    left: list[Path] = []
+
+    def collect(_func, path, _exc) -> None:
+        left.append(Path(path))
+
+    for entry in sorted(folder.iterdir()):
+        if entry.name == META:
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, onexc=collect)
+        else:
+            try:
+                os.unlink(entry)
+            except OSError:
+                left.append(entry)
+    if left:
+        return left
+    for path, remove in ((folder / META, os.unlink), (folder, os.rmdir)):
+        try:
+            remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            left.append(path)
+    return left
