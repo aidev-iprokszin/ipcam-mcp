@@ -7,7 +7,7 @@ period, since they predate the record (e.g. migrated files).
 """
 
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
@@ -104,6 +104,14 @@ def load_scene_baseline(folder: Path, meta: CameraMeta, scene: str, name: str) -
     if name not in usable:
         raise ValueError(f"baseline '{name}' not found; available: {', '.join(usable) or 'none'}")
     return baselines.load_baseline(folder, name)
+
+
+def removed_in_scene(
+    media_dir: Path, configured_uids: Collection[str], scene: str
+) -> list[store.StoredCamera]:
+    """Removed cameras whose last scene is ``scene``, oldest first: candidates for a camera
+    entering it to replace."""
+    return [c for c in store.removed_cameras(media_dir, configured_uids) if c.scene == scene]
 
 
 # --- the scene index and timeline over all camera folders ---

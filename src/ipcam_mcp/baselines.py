@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ipcam_mcp.management import ID_PATTERN
+from ipcam_mcp.config import NAME_PATTERN
 
-_NAME_RE = re.compile(ID_PATTERN)
+_NAME_RE = re.compile(NAME_PATTERN)
 
 
 @dataclass

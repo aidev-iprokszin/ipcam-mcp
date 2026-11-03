@@ -1008,3 +1008,55 @@ async def test_snapshot_without_camera_or_from_path_errors(registry):
     r = await call(registry, "camera_snapshot", {})
     assert r.is_error
     assert "camera is required unless from_path is given" in text_of(r)
+
+
+# --- successor forms ---
+
+
+def answering_each(*answers):
+    """An elicitation callback giving one (action, content) answer per call."""
+    calls: list = []
+    queue = list(answers)
+
+    async def cb(context, params):
+        calls.append(params)
+        action, content = queue.pop(0)
+        return ElicitResult(action=action, content=content)
+
+    cb.calls = calls
+    return cb
+
+
+async def test_add_camera_successor_form(managed, tmp_path):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    label = (
+        "Replaces 'garage' (added 2025-01-01, 1 snapshot, 0 baselines): "
+        "continue its compare and baselines"
+    )
+    cb = answering_each(
+        ("accept", {"choice": label}), ("accept", {"username": "u", "password": "p"})
+    )
+    server = build_server(reg, manager, allow_management=True)
+    async with Client(server, mode="legacy", elicitation_callback=cb) as client:
+        r = await client.call_tool("add_camera", {"name": "garage", "host": "10.0.0.7"})
+    assert not r.is_error, text_of(r)
+    assert text_of(r).endswith("; continues 'garage' in scene 'garage'")
+    choices = cb.calls[0].requested_schema["properties"]["choice"]["enum"]
+    assert choices == [label, "An additional camera in 'garage'", "Cancel"]
+
+
+async def test_set_scene_successor_form(managed, tmp_path):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    cb = answering_each(("accept", {"choice": "An additional camera in 'garage'"}))
+    server = build_server(reg, manager, allow_management=True)
+    async with Client(server, mode="legacy", elicitation_callback=cb) as client:
+        r = await client.call_tool("set_scene", {"camera": "office", "scene": "garage"})
+        cancel = answering_each(("decline", None))
+    assert text_of(r) == "moved 'office' to scene 'garage'"
+    assert len(cb.calls) == 1 and "office" in cb.calls[0].message
+    async with Client(server, mode="legacy", elicitation_callback=cancel) as client:
+        r = await client.call_tool("set_scene", {"camera": "office", "scene": "office"})
+    assert text_of(r) == "moved 'office' to scene 'office'"  # no removed camera in 'office'
+    assert cancel.calls == []

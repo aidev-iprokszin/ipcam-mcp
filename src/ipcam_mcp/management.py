@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from dotenv import dotenv_values
 
-from ipcam_mcp import config_writer, store
+from ipcam_mcp import config_writer, scenes, store
 from ipcam_mcp.adapters import onvif
 from ipcam_mcp.adapters.onvif import DeviceInfo
 from ipcam_mcp.config import NAME_PATTERN, AppConfig, load_config, media_dir_of
@@ -43,6 +43,15 @@ class Credentials:
 CredentialPrompt = Callable[[str], Awaitable[Credentials | None]]
 # (message, one description per target) -> index of the chosen target, "all", or None (cancel)
 DeletePrompt = Callable[[str, list[str]], Awaitable[int | Literal["all"] | None]]
+# (message, one label per removed camera) -> its index, "additional", or None to cancel
+SuccessorPrompt = Callable[[str, list[str]], Awaitable[int | Literal["additional"] | None]]
+CANCELLED = "cancelled; nothing was changed"
+
+
+class _Cancelled(Exception):
+    pass
+
+
 Prober = Callable[[str, str, str, int | None], Awaitable[DeviceInfo]]
 
 
@@ -154,6 +163,23 @@ class Manager:
         prompt: CredentialPrompt | None,
         onvif_port: int | None = None,
         scene: str | None = None,
+        successor: SuccessorPrompt | None = None,
+    ) -> str:
+        """Add a camera. If its scene has removed cameras, ``successor`` asks (before the
+        login form) whether it replaces one of them."""
+        try:
+            return await self._add(cam_id, host, prompt, onvif_port, scene, successor)
+        except _Cancelled:
+            return CANCELLED
+
+    async def _add(
+        self,
+        cam_id: str,
+        host: str,
+        prompt: CredentialPrompt | None,
+        onvif_port: int | None,
+        scene: str | None,
+        successor: SuccessorPrompt | None,
     ) -> str:
         validate_id(cam_id)
         validate_host(host)
@@ -179,19 +205,21 @@ class Manager:
                 creds = self._file_credentials(cam_id, host, env_path)
                 if isinstance(creds, str):
                     return creds
+                pred, note = await self._ask_successor(config, cam_id, scene or cam_id, successor)
             elif env_path.exists():
                 raise ValueError(
                     f"{env_path} already exists; fill it in and call add_camera with "
                     'credentials_via="file", or delete it to use the form'
                 )
             else:
+                pred, note = await self._ask_successor(config, cam_id, scene or cam_id, successor)
                 creds = await prompt(
                     f"Login for camera '{cam_id}' at {host}: the camera's local ONVIF/RTSP "
                     "account (not a cloud login). The password is visible while typing "
                     "but is not sent to the AI model."
                 )
                 if creds is None:
-                    return "cancelled; nothing was changed"
+                    return CANCELLED
 
             info = await self._probe(host, creds.user, creds.password, onvif_port)
 
@@ -218,11 +246,46 @@ class Manager:
                 lambda: config_writer.add_section(self._config_path, cam_id, section), undo
             )
             store.ensure_folder(config.media_dir, section["uid"], cam_id, scene or cam_id)
+            if pred is not None:
+                store.enter_scene(
+                    config.media_dir, section["uid"], cam_id, scene or cam_id, continues=pred.uid
+                )
+                note = f"; continues '{pred.name}' in scene '{scene or cam_id}'"
             caps = next(c["capabilities"] for c in self._registry.list() if c["id"] == cam_id)
             return (
                 f"added '{cam_id}' ({info.manufacturer} {info.model}); "
-                f"capabilities: {', '.join(caps)}; onvif_port {info.onvif_port}"
+                f"capabilities: {', '.join(caps)}; onvif_port {info.onvif_port}{note}"
             )
+
+    async def _ask_successor(
+        self, config: AppConfig, camera: str, scene: str, successor: SuccessorPrompt | None
+    ) -> tuple[store.StoredCamera | None, str]:
+        """The removed camera ``camera`` replaces in ``scene`` (or None), and a note for the
+        result. Raises _Cancelled."""
+        uids = {d.uid for d in config.devices.values()}
+        found = scenes.removed_in_scene(config.media_dir, uids, scene)
+        if not found:
+            return None, ""
+        if successor is None:
+            names = ", ".join(c.name for c in found)
+            return None, (
+                f"; '{scene}' has earlier cameras ({names}); declare a successor with set_scene "
+                "from a client that shows forms"
+            )
+        answer = await successor(
+            f"Camera '{camera}' is entering scene '{scene}', which earlier cameras watched. "
+            "Does it replace one of them? A replacement continues the old camera's compare "
+            "history and baselines.",
+            [
+                f"Replaces '{c.name}' (added {c.created:%Y-%m-%d}, "
+                f"{_plural(c.snapshots, 'snapshot')}, {_plural(c.baselines, 'baseline')}): "
+                "continue its compare and baselines"
+                for c in found
+            ],
+        )
+        if answer is None:
+            raise _Cancelled
+        return (None, "") if answer == "additional" else (found[answer], "")
 
     async def rename(self, old: str, new: str) -> str:
         validate_id(new)
@@ -267,15 +330,23 @@ class Manager:
                 )
             return f"renamed '{old}' to '{new}'"
 
-    async def set_scene(self, camera: str, scene: str) -> str:
-        """Move ``camera`` to ``scene`` (recorded as a new period in its camera.json)."""
+    async def set_scene(
+        self, camera: str, scene: str, successor: SuccessorPrompt | None = None
+    ) -> str:
+        """Move ``camera`` to ``scene`` (recorded as a new period in its camera.json). If the
+        scene has removed cameras, ``successor`` asks whether it replaces one of them."""
         validate_scene(scene)
         async with self._lock:
             config = self._load(self._config_path)
             if camera not in config.devices:
                 raise ValueError(f"camera '{camera}' not found")
-            if config.devices[camera].scene == scene:
-                return f"'{camera}' is already in scene '{scene}'"
+            dev = config.devices[camera]
+            try:
+                if dev.scene == scene:
+                    return await self._declare_successor(config, camera, scene, successor)
+                pred, note = await self._ask_successor(config, camera, scene, successor)
+            except _Cancelled:
+                return CANCELLED
             # Under the camera lock, so a running capture belongs to one scene, not two.
             async with self._registry.lock(camera):
                 await self._mutate(
@@ -283,14 +354,34 @@ class Manager:
                     close_retired=False,  # needs the camera lock held here
                 )
                 dev = self._registry.config(camera)
-                meta = store.enter_scene(config.media_dir, dev.uid, camera, scene)
+                meta = store.enter_scene(
+                    config.media_dir, dev.uid, camera, scene, pred.uid if pred else None
+                )
                 # Capture names have whole seconds and the period starts at the next one:
                 # hold the camera until then, so no later capture is stamped in the old scene.
                 wait = (meta.scenes[-1].since - datetime.now().astimezone()).total_seconds()
                 if wait > 0:
                     await asyncio.sleep(wait)
             await self._registry.close_retired()
-            return f"moved '{camera}' to scene '{scene}'"
+            if pred is not None:
+                note = f"; continues '{pred.name}'"
+            return f"moved '{camera}' to scene '{scene}'{note}"
+
+    async def _declare_successor(
+        self, config: AppConfig, camera: str, scene: str, successor: SuccessorPrompt | None
+    ) -> str:
+        """set_scene into the current scene: ask again if no predecessor is declared yet."""
+        already = f"'{camera}' is already in scene '{scene}'"
+        uid = config.devices[camera].uid
+        meta = store.read_meta(config.media_dir / uid)
+        if meta is not None and meta.scenes[-1].continues:
+            return already
+        pred, note = await self._ask_successor(config, camera, scene, successor)
+        if pred is None:
+            return already + note
+        async with self._registry.lock(camera):
+            store.enter_scene(config.media_dir, uid, camera, scene, continues=pred.uid)
+        return f"'{camera}' continues '{pred.name}' in scene '{scene}'"
 
     async def remove(self, cam_id: str) -> str:
         async with self._lock:

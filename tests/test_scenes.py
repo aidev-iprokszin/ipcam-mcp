@@ -12,6 +12,7 @@ from ipcam_mcp.scenes import (
     load_scene_baseline,
     parse_bound,
     period_at,
+    removed_in_scene,
     scene_index,
     timeline,
 )
@@ -209,3 +210,11 @@ def test_parse_bound_date_and_datetime_and_invalid():
 def test_parse_bound_compact_date_is_whole_day():
     assert parse_bound("20261103", end=True) == parse_bound("2026-11-03", end=True)
     assert parse_bound("20261103", end=False) == datetime(2026, 11, 3).astimezone()
+
+
+def test_successor_candidates_only_removed(tmp_path):
+    configured = media(tmp_path)
+    uids = {d.uid for d in configured.values()}
+    # old-door: removed, last in front-door. door-l: configured. shed: removed, elsewhere.
+    assert [c.uid for c in removed_in_scene(tmp_path, uids, "front-door")] == ["cccccccc"]
+    assert removed_in_scene(tmp_path, uids, "garage") == []

@@ -1013,3 +1013,123 @@ def test_scene_sync_io_error_is_logged_not_fatal(env, monkeypatch, caplog):
         config = prepare_config(cfg)
     assert config.devices["office"].scene == "desk"
     assert "could not record" in caplog.text
+
+
+# --- successors ---
+
+OLD = datetime(2025, 1, 1).astimezone()
+
+
+def removed_camera(media: Path, uid="zzzzzzzz", name="garage", scene=None) -> Path:
+    folder = media / uid
+    write_meta(folder, CameraMeta(uid, name, OLD, (store.Period(scene or name, OLD),)))
+    (folder / f"{name}_20250101-000000.jpg").write_bytes(b"x")
+    return folder
+
+
+def asking(answer):
+    calls: list = []
+
+    async def successor(message, labels):
+        calls.append((message, labels))
+        return answer
+
+    successor.calls = calls
+    return successor
+
+
+def last_period(registry, camera):
+    return read_meta(registry.folder(camera)).scenes[-1]
+
+
+GARAGE_LABEL = (
+    "Replaces 'garage' (added 2025-01-01, 1 snapshot, 0 baselines): "
+    "continue its compare and baselines"
+)
+
+
+async def test_add_into_scene_with_removed_camera_asks_first(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, _, _ = make_manager(cfg)
+    prompt = prompt_with(Credentials(USER, PASSWORD))
+    successor = asking(None)
+    result = await mgr.add("door", "10.0.0.5", prompt, scene="garage", successor=successor)
+    assert result == "cancelled; nothing was changed"
+    assert prompt.messages == []  # asked before the login form
+    assert successor.calls[0][1] == [GARAGE_LABEL]
+    assert "door" not in tomllib.loads(cfg.read_text())["cameras"]
+
+
+async def test_add_successor_sets_continues(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    result = await mgr.add(
+        "garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)), successor=asking(0)
+    )
+    assert result.endswith("; continues 'garage' in scene 'garage'")
+    period = last_period(registry, "garage")
+    assert (period.scene, period.continues) == ("garage", "zzzzzzzz")
+
+
+async def test_add_additional_no_continues(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    result = await mgr.add(
+        "door", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)), scene="garage",
+        successor=asking("additional"),
+    )  # fmt: skip
+    assert result.startswith("added 'door'") and "continues" not in result
+    assert last_period(registry, "door").continues is None
+
+
+async def test_add_successor_no_form_note(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    result = await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    assert result.endswith(
+        "; 'garage' has earlier cameras (garage); declare a successor with set_scene from a "
+        "client that shows forms"
+    )
+    assert last_period(registry, "garage").continues is None
+
+
+async def test_set_scene_successor(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    result = await mgr.set_scene("office", "garage", successor=asking(0))
+    assert result == "moved 'office' to scene 'garage'; continues 'garage'"
+    period = last_period(registry, "office")
+    assert (period.scene, period.continues) == ("garage", "zzzzzzzz")
+
+
+async def test_set_scene_successor_cancel_changes_nothing(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    assert await mgr.set_scene("office", "garage", successor=asking(None)) == (
+        "cancelled; nothing was changed"
+    )
+    assert last_period(registry, "office").scene == "office"
+    assert "scene" not in tomllib.loads(cfg.read_text())["cameras"]["office"]
+
+
+async def test_set_scene_same_scene_reasks_without_continues(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media", "yyyyyyyy", "office-old", scene="office")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    result = await mgr.set_scene("office", "office", successor=asking(0))
+    assert result == "'office' continues 'office-old' in scene 'office'"
+    assert last_period(registry, "office").continues == "yyyyyyyy"
+    again = asking(0)
+    assert await mgr.set_scene("office", "office", successor=again) == (
+        "'office' is already in scene 'office'"
+    )
+    assert again.calls == []
