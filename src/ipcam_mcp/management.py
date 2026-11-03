@@ -224,18 +224,18 @@ class Manager:
             if cam_id in config.devices:
                 raise ValueError(f"camera '{cam_id}' already exists")
             env_path = config.secrets_dir / f"{cam_id}.env"
+            if env_path.exists():  # e.g. kept by a rename because cameras share it
+                users = [
+                    other
+                    for other, spec in self._sections().items()
+                    if self._is_managed(spec, env_path)
+                ]
+                if users:
+                    raise ValueError(
+                        f"{env_path} is already used by camera '{users[0]}'; pick another name"
+                    )
 
             if prompt is None:
-                if env_path.exists():
-                    users = [
-                        other
-                        for other, spec in self._sections().items()
-                        if self._is_managed(spec, env_path)
-                    ]
-                    if users:
-                        raise ValueError(
-                            f"{env_path} is already used by camera '{users[0]}'; pick another name"
-                        )
                 creds = self._file_credentials(cam_id, host, env_path)
                 if isinstance(creds, str):
                     return creds
@@ -351,7 +351,15 @@ class Manager:
 
             old_path = config.secrets_dir / f"{old}.env"
             new_path = config.secrets_dir / f"{new}.env"
-            managed = self._is_managed(self._sections()[old], old_path)
+            sections = self._sections()
+            # The managed file moves with the camera, unless another camera uses it too.
+            own = self._is_managed(sections[old], old_path)
+            sharing = [
+                other
+                for other, spec in sections.items()
+                if own and other != old and self._is_managed(spec, old_path)
+            ]
+            managed = own and not sharing
             if managed and new_path.exists():
                 raise ConfigError(f"secrets file already exists: {new_path}")
 
@@ -371,6 +379,11 @@ class Manager:
 
             # Under the camera lock, so a running capture does not write the old name back.
             note = ""
+            if sharing:
+                note = (
+                    f"; its secrets file {old_path} is shared with '{sharing[0]}' and keeps its "
+                    "name"
+                )
             async with self._registry.lock(old):
                 await self._mutate(
                     lambda: config_writer.rename_section(self._config_path, old, new, updates),
@@ -383,7 +396,7 @@ class Manager:
                     if (config.media_dir / dev.uid).is_dir():
                         store.ensure_folder(config.media_dir, dev.uid, new, dev.scene or old)
                 except OSError as e:
-                    note = f"; could not update its media folder ({os_error_text(e)})"
+                    note += f"; could not update its media folder ({os_error_text(e)})"
             await self._registry.close_retired()
             if self._removed_named(config, new):
                 note = (
