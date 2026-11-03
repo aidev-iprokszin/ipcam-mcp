@@ -1162,3 +1162,13 @@ async def test_successor_labels_unique_for_twins(env):
     )
     labels = successor.calls[0][1]
     assert labels == [f"{GARAGE_LABEL} [yyyyyyyy]", f"{GARAGE_LABEL} [zzzzzzzz]"]
+
+
+async def test_rename_with_corrupt_meta_keeps_scene(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    (folder / "camera.json").write_text("{not json")
+    await mgr.rename("office", "front")
+    meta = read_meta(folder)
+    assert meta.name == "front" and meta.current_scene == "office"

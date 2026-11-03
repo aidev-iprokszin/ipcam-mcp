@@ -1,7 +1,9 @@
+import errno
 import json
 import os
 import re
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -331,3 +333,25 @@ def test_read_meta_naive_times_are_local(tmp_path):
     meta = read_meta(folder)
     assert meta.created == datetime(2026, 11, 1, 10).astimezone()
     assert meta.scenes[0].since.tzinfo is not None
+
+
+def _fail_meta_reads(monkeypatch):
+    real = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self.name == "camera.json":
+            raise OSError(errno.EMFILE, "Too many open files")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+
+def test_ensure_folder_read_error_keeps_meta(tmp_path, monkeypatch):
+    folder = ensure_folder(tmp_path, "aaaaaaaa", "cam", scene="porch")
+    before = (folder / "camera.json").read_text()
+    _fail_meta_reads(monkeypatch)
+    with pytest.raises(OSError):
+        ensure_folder(tmp_path, "aaaaaaaa", "cam")
+    monkeypatch.undo()
+    assert (folder / "camera.json").read_text() == before
+    assert _backups(folder) == []

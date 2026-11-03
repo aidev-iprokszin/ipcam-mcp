@@ -233,8 +233,9 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
 - **`camera.json … unreadable, kept as camera.json.bad-…`** in the log: a camera's
   `camera.json` could not be read (for example after a bad hand edit), so a new one was written
   and the old one kept next to it. To get the camera's creation time and scene history back,
-  fix the kept file and rename it to `camera.json` while the server is stopped. Timestamps
-  without a UTC offset are read as local time.
+  fix the kept file and rename it to `camera.json` while the server is stopped (scene changes
+  made since are then lost; redo them with `set_scene`). Timestamps without a UTC offset are
+  read as local time.
 
 ## Known limitations
 
