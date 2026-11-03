@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from ipcam_mcp import baselines
 from ipcam_mcp.capabilities import PTZ, Amount, Direction, Quality
-from ipcam_mcp.config import config_path
+from ipcam_mcp.config import AppConfig, config_path
 from ipcam_mcp.errors import CameraMcpError, ConfigError, DeviceError
 from ipcam_mcp.imaging import (
     LIGHTING_PCT,
@@ -30,6 +30,7 @@ from ipcam_mcp.imaging import (
 )
 from ipcam_mcp.management import Credentials, Manager, prepare_config
 from ipcam_mcp.media import make_preview
+from ipcam_mcp.migrate import migrate_flat_layout
 from ipcam_mcp.registry import Registry
 
 log = logging.getLogger("ipcam_mcp")
@@ -425,6 +426,21 @@ def _is_loopback(host: str) -> bool:
     return host in _PROTECTED_LOCAL_HOSTS
 
 
+def _migrate(cfg: AppConfig) -> None:
+    """Move media from the flat pre-uid layout into per-camera folders (once)."""
+    report = migrate_flat_layout(cfg.media_dir, {n: d.uid for n, d in cfg.devices.items()})
+    if report.moved:
+        log.info(
+            "migrated media of %d camera(s) to per-camera folders; %d removed camera(s) kept",
+            len(report.moved),
+            len(report.removed_cameras),
+        )
+    for path in report.skipped:
+        log.warning("not migrated, a file with that name already exists: %s", path)
+    if report.error:
+        log.warning("media migration stopped: %s; retried at next start", report.error)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="ipcam-mcp", description=__doc__)
     parser.add_argument("--transport", choices=["stdio", "http"], default="stdio")
@@ -453,6 +469,7 @@ def main(argv: list[str] | None = None) -> None:
     except ConfigError as e:
         print(f"ipcam-mcp: {e}", file=sys.stderr)
         sys.exit(2)
+    _migrate(cfg)
 
     manager = Manager(path, registry)
     server = build_server(registry, manager, allow_management=cfg.allow_management)

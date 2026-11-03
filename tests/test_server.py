@@ -369,6 +369,31 @@ def test_main_assigns_missing_uids(tmp_path, monkeypatch):
     assert 'uid = "' in cfg.read_text()
 
 
+def test_main_runs_migration(tmp_path, monkeypatch):
+    secrets = tmp_path / "s.env"
+    secrets.write_text('H="10.0.0.2"\nU="u"\nP="p"\n')
+    secrets.chmod(0o600)
+    media = tmp_path / "media"
+    media.mkdir()
+    (media / "office_20261103-111200.jpg").write_bytes(b"x")
+    cfg = tmp_path / "cameras.toml"
+    cfg.write_text(
+        f'media_dir = "{media}"\n[cameras.office]\nuid = "{uid_for("office")}"\n'
+        f'type = "tapo_onvif"\nsecrets_file = "{secrets}"\n'
+        'host_var = "H"\nuser_var = "U"\npassword_var = "P"\n'
+    )
+    monkeypatch.setenv("IPCAM_MCP_CONFIG", str(cfg))
+
+    class StubServer:
+        def run(self, transport, **kw):
+            pass
+
+    monkeypatch.setattr(server_mod, "build_server", lambda *a, **kw: StubServer())
+    main([])
+    assert (media / uid_for("office") / "office_20261103-111200.jpg").exists()
+    assert not (media / "office_20261103-111200.jpg").exists()
+
+
 # --- camera management tools ---
 
 
