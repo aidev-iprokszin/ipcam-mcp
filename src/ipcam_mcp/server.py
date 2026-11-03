@@ -13,14 +13,13 @@ from typing import Annotated, Any, Literal
 from mcp import types
 from mcp.server.elicitation import AcceptedElicitation
 from mcp.server.mcpserver import Context, Image, MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
 from pydantic import BaseModel, Field, create_model
 
 from ipcam_mcp import baselines, scenes, store
 from ipcam_mcp.capabilities import PTZ, Amount, Direction, Quality
 from ipcam_mcp.config import AppConfig, config_path
-from ipcam_mcp.errors import CameraMcpError, ConfigError, DeviceError
+from ipcam_mcp.errors import ConfigError, DeviceError
 from ipcam_mcp.imaging import (
     LIGHTING_PCT,
     NO_CHANGE_PCT,
@@ -32,6 +31,8 @@ from ipcam_mcp.management import Credentials, Manager, prepare_config
 from ipcam_mcp.media import make_preview
 from ipcam_mcp.migrate import migrate_flat_layout
 from ipcam_mcp.registry import Registry
+from ipcam_mcp.scene_tools import add_scene_tools
+from ipcam_mcp.tooling import guarded as _guarded
 
 log = logging.getLogger("ipcam_mcp")
 
@@ -48,19 +49,9 @@ async def _position(adapter) -> tuple[float, float] | None:
 INSTRUCTIONS = (
     "Control local network cameras. Call list_cameras first to learn camera ids and what each "
     "supports (ptz = pan/tilt). Snapshots and recordings are saved on the user's machine; paths "
-    "are returned."
+    "are returned. Cameras watch scenes (places); list_scenes and the scene_* tools work on all "
+    "cameras of a scene and its history."
 )
-
-
-async def _guarded[T](fn: Callable[[], Awaitable[T]]) -> T:
-    """Turn our errors into tool errors; hide details of unexpected ones."""
-    try:
-        return await fn()
-    except (CameraMcpError, ValueError) as e:
-        raise ToolError(str(e)) from None
-    except Exception as e:  # noqa: BLE001 — never leak unexpected messages to the client
-        log.error("unexpected %s in tool call", type(e).__name__)
-        raise ToolError(f"internal error ({type(e).__name__}); see server log") from None
 
 
 Region = Literal[
@@ -214,9 +205,23 @@ def build_server(
             raise ValueError("from_path must be a .jpg snapshot inside the media directory.")
         return path
 
+    async def capture(camera: str, quality: Quality) -> Path:
+        registry.get(camera, "camera")  # fail fast for unknown cameras
+        async with registry.lock(camera):
+            # Again under the lock: the camera may have been removed or replaced
+            # while this call waited (delete/remove/rename_camera, reload).
+            adapter = registry.get(camera, "camera")
+            return await adapter.snapshot(quality)
+
+    async def snapshot_camera(camera: str, quality: Quality) -> list:
+        """One camera's snapshot: the preview image and the saved path. Raises on errors."""
+        path = await capture(camera, quality)
+        preview = await make_preview(path)
+        return [Image(data=preview, format="jpeg"), f"Saved full-size snapshot: {path}"]
+
     @mcp.tool()
     async def camera_snapshot(
-        camera: str,
+        camera: str | None = None,
         quality: Quality = "high",
         crop: list[float] | None = None,
         region: Region | None = None,
@@ -228,32 +233,31 @@ def build_server(
         quality: "high" = main stream (1080p); "low" = sub stream (smaller, quicker).
         crop: [x, y, w, h] as fractions of the frame (0-1) to see a detail at full resolution.
         region: a named ninth of the frame instead of crop (not both).
-        from_path: reuse an earlier full-size snapshot (e.g. the one just viewed) instead of
-        taking a new one; combine with crop/region to zoom into it. The camera is not contacted.
+        from_path: reuse an earlier full-size snapshot (e.g. the one just viewed, or one from
+        scene_timeline) instead of taking a new one; combine with crop/region to zoom into it.
+        The camera is not contacted, and camera may be omitted.
         """
 
         async def run():
             box = crop_box(crop, region)
-            registry.get(camera, "camera")  # fail fast for unknown cameras
-            async with registry.lock(camera):
-                # Again under the lock: the camera may have been removed or replaced
-                # while this call waited (delete/remove/rename_camera, reload).
-                adapter = registry.get(camera, "camera")
-                if from_path is not None:
-                    path = resolve_source(from_path)
-                    label = "Source"
-                else:
-                    path = await adapter.snapshot(quality)
-                    label = "Saved full-size snapshot"
-                if box is None and from_path is None:
-                    preview = await make_preview(path)
-                    return [Image(data=preview, format="jpeg"), f"{label}: {path}"]
-                data, (w, h) = crop_jpeg(path, box)
-                text = f"{label}: {path}"
-                if box is not None:
-                    x, y, bw, bh = box
-                    text += f"\ncropped to [{x:.3f}, {y:.3f}, {bw:.3f}, {bh:.3f}] ({w}\u00d7{h} px)"
-                return [Image(data=data, format="jpeg"), text]
+            if from_path is not None:
+                if camera is not None:
+                    registry.get(camera, "camera")  # still reject unknown cameras
+                path = resolve_source(from_path)
+                label = "Source"
+            elif camera is None:
+                raise ValueError("camera is required unless from_path is given")
+            elif box is None:
+                return await snapshot_camera(camera, quality)
+            else:
+                path = await capture(camera, quality)
+                label = "Saved full-size snapshot"
+            data, (w, h) = crop_jpeg(path, box)
+            text = f"{label}: {path}"
+            if box is not None:
+                x, y, bw, bh = box
+                text += f"\ncropped to [{x:.3f}, {y:.3f}, {bw:.3f}, {bh:.3f}] ({w}\u00d7{h} px)"
+            return [Image(data=data, format="jpeg"), text]
 
         return await _guarded(run)
 
@@ -281,53 +285,55 @@ def build_server(
 
         return await _guarded(run)
 
+    async def compare_camera(camera: str, baseline: str | None, quality: Quality) -> list:
+        """One camera's compare: the annotated image and the report. Raises on errors."""
+        registry.get(camera, "camera")  # fail fast for unknown cameras
+        async with registry.lock(camera):
+            # Again under the lock: the camera may have been removed or replaced
+            # while this call waited (delete/remove/rename_camera, reload).
+            adapter = registry.get(camera, "camera")
+            folder, meta = _scene_meta(camera)
+            base = None
+            if baseline is not None:
+                base = scenes.load_scene_baseline(folder, meta, meta.current_scene, baseline)
+                ref_path = base.path
+                label = f"baseline '{baseline}'"
+                age = datetime.now().astimezone() - base.taken
+                age_s = age.total_seconds()
+            else:
+                ref_path = scenes.latest_in_scene(folder, meta, meta.current_scene)
+                if ref_path is None:
+                    raise ValueError(
+                        f"no previous snapshot of '{camera}' to compare with; "
+                        "take a snapshot first (camera_snapshot or camera_save_baseline)."
+                    )
+                label = f"previous snapshot {ref_path.name}"
+                age_s = time.time() - ref_path.stat().st_mtime
+            # Read before capturing, so the comparison is against the previous frame.
+            ref = ref_path.read_bytes()
+            path = await adapter.snapshot(quality)
+            moved = False
+            if base is not None and base.position is not None and isinstance(adapter, PTZ):
+                now = await _position(adapter)
+                if now is not None:
+                    moved = (
+                        abs(now[0] - base.position[0]) > MOVED_TOLERANCE
+                        or abs(now[1] - base.position[1]) > MOVED_TOLERANCE
+                    )
+            res = compare(ref, path.read_bytes())
+            text = _compare_text(res, label, _age(age_s), path, moved)
+            return [Image(data=res.annotated, format="jpeg"), text]
+
     @mcp.tool()
     async def camera_compare(
         camera: str, baseline: str | None = None, quality: Quality = "high"
     ) -> list:
-        """Take a new snapshot and report what changed compared with the previous snapshot of
-        this camera, or with a named baseline. Use the reported cells as `region` in
-        camera_snapshot to look closer."""
+        """Take a new snapshot and report what changed compared with this camera's previous
+        snapshot in its current scene, or with a named baseline saved in that scene. Use the
+        reported cells as `region` in camera_snapshot to look closer."""
+        return await _guarded(lambda: compare_camera(camera, baseline, quality))
 
-        async def run():
-            registry.get(camera, "camera")  # fail fast for unknown cameras
-            async with registry.lock(camera):
-                # Again under the lock: the camera may have been removed or replaced
-                # while this call waited (delete/remove/rename_camera, reload).
-                adapter = registry.get(camera, "camera")
-                folder, meta = _scene_meta(camera)
-                base = None
-                if baseline is not None:
-                    base = scenes.load_scene_baseline(folder, meta, meta.current_scene, baseline)
-                    ref_path = base.path
-                    label = f"baseline '{baseline}'"
-                    age = datetime.now().astimezone() - base.taken
-                    age_s = age.total_seconds()
-                else:
-                    ref_path = scenes.latest_in_scene(folder, meta, meta.current_scene)
-                    if ref_path is None:
-                        raise ValueError(
-                            f"no previous snapshot of '{camera}' to compare with; "
-                            "take a snapshot first (camera_snapshot or camera_save_baseline)."
-                        )
-                    label = f"previous snapshot {ref_path.name}"
-                    age_s = time.time() - ref_path.stat().st_mtime
-                # Read before capturing, so the comparison is against the previous frame.
-                ref = ref_path.read_bytes()
-                path = await adapter.snapshot(quality)
-                moved = False
-                if base is not None and base.position is not None and isinstance(adapter, PTZ):
-                    now = await _position(adapter)
-                    if now is not None:
-                        moved = (
-                            abs(now[0] - base.position[0]) > MOVED_TOLERANCE
-                            or abs(now[1] - base.position[1]) > MOVED_TOLERANCE
-                        )
-                res = compare(ref, path.read_bytes())
-                text = _compare_text(res, label, _age(age_s), path, moved)
-                return [Image(data=res.annotated, format="jpeg"), text]
-
-        return await _guarded(run)
+    add_scene_tools(mcp, registry, snapshot_camera, compare_camera)
 
     @mcp.tool()
     async def camera_record(
