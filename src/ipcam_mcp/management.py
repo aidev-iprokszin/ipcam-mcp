@@ -18,7 +18,7 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-from ipcam_mcp import config_writer
+from ipcam_mcp import config_writer, media
 from ipcam_mcp.adapters import onvif
 from ipcam_mcp.adapters.onvif import DeviceInfo
 from ipcam_mcp.config import AppConfig, load_config
@@ -163,23 +163,31 @@ class Manager:
 
             old_path = config.secrets_dir / f"{old}.env"
             new_path = config.secrets_dir / f"{new}.env"
-            updates: dict[str, str] | None = None
-            undo: list[Callable[[], None]] = []
-            if self._is_managed(self._sections()[old], old_path):
-                if new_path.exists():
-                    raise ConfigError(f"secrets file already exists: {new_path}")
-                try:
-                    os.rename(old_path, new_path)
-                except OSError as exc:
-                    raise ConfigError(
-                        f"could not rename {old_path} to {new_path}: {exc.strerror or exc}"
-                    ) from exc
-                undo.append(lambda: os.rename(new_path, old_path))
-                updates = {"secrets_file": str(new_path)}
+            managed = self._is_managed(self._sections()[old], old_path)
+            if managed and new_path.exists():
+                raise ConfigError(f"secrets file already exists: {new_path}")
 
-            await self._mutate(
-                lambda: config_writer.rename_section(self._config_path, old, new, updates), undo
-            )
+            # Wait for a running snapshot/recording of the camera: its file is moved next.
+            async with self._registry.lock(old):
+                undo = [media.rename_camera_media(config.media_dir, old, new)]
+                updates: dict[str, str] | None = None
+                if managed:
+                    try:
+                        os.rename(old_path, new_path)
+                    except OSError as exc:
+                        undo[0]()
+                        raise ConfigError(
+                            f"could not rename {old_path} to {new_path}: {exc.strerror or exc}"
+                        ) from exc
+                    undo.append(lambda: os.rename(new_path, old_path))
+                    updates = {"secrets_file": str(new_path)}
+
+                await self._mutate(
+                    lambda: config_writer.rename_section(self._config_path, old, new, updates),
+                    undo,
+                    close_retired=False,  # needs the camera lock held here
+                )
+            await self._registry.close_retired()
             return f"renamed '{old}' to '{new}'"
 
     async def remove(self, cam_id: str) -> str:
@@ -243,10 +251,15 @@ class Manager:
         return Path(spec["secrets_file"]).expanduser().resolve() == managed_path.resolve()
 
     async def _mutate(
-        self, change: Callable[[], None], undo: Sequence[Callable[[], None]] = ()
+        self,
+        change: Callable[[], None],
+        undo: Sequence[Callable[[], None]] = (),
+        *,
+        close_retired: bool = True,
     ) -> None:
         """Apply ``change`` and reload; on failure restore the config and run ``undo``.
-        Afterwards, close the connections of replaced or removed cameras."""
+        Afterwards (unless ``close_retired`` is false), close the connections of replaced or
+        removed cameras."""
         original: str | None = None
         existed = self._config_path.exists()
         try:
@@ -268,4 +281,5 @@ class Manager:
                 except Exception:
                     log.exception("rollback: undo step failed")
             raise
-        await self._registry.close_retired()
+        if close_retired:
+            await self._registry.close_retired()

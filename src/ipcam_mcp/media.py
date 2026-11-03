@@ -1,11 +1,12 @@
-"""ffmpeg wrapper: build commands, run them safely, mask credentials."""
+"""Media files: ffmpeg commands (run safely, credentials masked) and the on-disk layout."""
 
 import asyncio
 import contextlib
+import os
 import re
 import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -34,6 +35,52 @@ def media_path(media_dir: Path, device_id: str, ext: str, now: datetime | None =
             return path
         except FileExistsError:
             n += 1
+
+
+def baselines_dir(media_dir: Path, cam_id: str) -> Path:
+    return media_dir / "baselines" / cam_id
+
+
+def capture_files(media_dir: Path, cam_id: str) -> list[Path]:
+    """The camera's snapshots and recordings, as named by ``media_path`` (exact id match)."""
+    pattern = re.compile(rf"^{re.escape(cam_id)}_\d{{8}}-\d{{6}}(?:-\d+)?\.(?:jpg|mp4)$")
+    try:
+        return sorted(p for p in media_dir.iterdir() if pattern.match(p.name) and p.is_file())
+    except OSError:
+        return []
+
+
+def rename_camera_media(media_dir: Path, old: str, new: str) -> Callable[[], None]:
+    """Move ``old``'s baselines folder and captures to ``new``; return a function that
+    moves them back. Refuses if ``new`` already has media (left by an earlier camera with
+    that id), which would otherwise be mixed in as comparison references."""
+    old_dir, new_dir = baselines_dir(media_dir, old), baselines_dir(media_dir, new)
+    if new_dir.exists() or capture_files(media_dir, new):
+        raise ValueError(
+            f"media for '{new}' already exist in {media_dir} (baselines/{new}/ or {new}_* "
+            "files from an earlier camera); move or delete them first"
+        )
+    moves = [(p, p.with_name(new + p.name[len(old) :])) for p in capture_files(media_dir, old)]
+    if old_dir.is_dir():
+        moves.append((old_dir, new_dir))
+
+    done: list[tuple[Path, Path]] = []
+
+    def undo() -> None:
+        for src, dst in reversed(done):
+            os.rename(dst, src)
+        done.clear()
+
+    try:
+        for src, dst in moves:
+            os.rename(src, dst)
+            done.append((src, dst))
+    except OSError as exc:
+        undo()
+        raise MediaError(
+            f"could not move media of '{old}' to '{new}': {exc.strerror or exc}"
+        ) from exc
+    return undo
 
 
 def _rtsp_input(url: str) -> list[str]:

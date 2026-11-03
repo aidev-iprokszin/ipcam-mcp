@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ipcam_mcp.management import ID_PATTERN
+from ipcam_mcp.media import baselines_dir
 
 _NAME_RE = re.compile(ID_PATTERN)
 
@@ -50,7 +51,7 @@ def check_name(name: str) -> None:
 
 
 def _dir(media_dir: Path, cam_id: str) -> Path:
-    return media_dir / "baselines" / cam_id
+    return baselines_dir(media_dir, cam_id)
 
 
 def _replace_atomic(dest: Path, write) -> None:

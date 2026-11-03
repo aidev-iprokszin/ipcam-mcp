@@ -138,7 +138,7 @@ agent picked up elsewhere.
 | Tool | What it does |
 |---|---|
 | `add_camera(id, host, credentials_via="form", onvif_port=None)` | Verifies the login over ONVIF (tries port 80, then 2020, unless you give `onvif_port`), detects pan/tilt, then adds the camera. `id` is lowercase letters, digits, `-`, `_` (max 32) |
-| `rename_camera(old, new)` | Changes a camera's id; its secrets file is renamed too if the tool created it. Media files are not renamed |
+| `rename_camera(old, new)` | Changes a camera's id; its baselines, snapshots and recordings move to the new id (so `camera_compare` keeps working), and its secrets file is renamed too if the tool created it. Refused if media of an earlier camera with the new id are still in `media_dir` |
 | `remove_camera(id)` | Removes the camera from the config; never deletes snapshots or recordings |
 | `reload_cameras()` | Always available. Re-reads `cameras.toml` after a manual edit and lists the cameras |
 

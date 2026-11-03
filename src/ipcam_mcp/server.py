@@ -404,7 +404,7 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
 
     @mcp.tool()
     async def rename_camera(old: str, new: str) -> str:
-        """Change a camera's id."""
+        """Change a camera's id. Its baselines, snapshots and recordings move to the new id."""
         return await _guarded(lambda: manager.rename(old, new))
 
     @mcp.tool()

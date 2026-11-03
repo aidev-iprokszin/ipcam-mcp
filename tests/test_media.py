@@ -199,3 +199,92 @@ async def test_run_ffmpeg_cancel_when_process_already_exited(tmp_path, monkeypat
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# --- rename_camera_media ---
+
+
+def _media(tmp_path):
+    m = tmp_path / "media"
+    (m / "baselines" / "office").mkdir(parents=True)
+    (m / "baselines" / "office" / "door.jpg").write_bytes(b"jpg")
+    (m / "baselines" / "office" / "door.json").write_text("{}")
+    for name in [
+        "office_20261103-111200.jpg",
+        "office_20261103-111200-2.jpg",
+        "office_20261103-111300.mp4",
+        "office_test_20261103-111200.jpg",  # another camera whose id starts with office_
+        "officex_20261103-111200.jpg",
+        "office_notes.txt",
+    ]:
+        (m / name).write_bytes(b"x")
+    return m
+
+
+def _names(m):
+    return sorted(p.name for p in m.iterdir() if p.is_file())
+
+
+def test_rename_camera_media_moves_baselines_and_captures(tmp_path):
+    m = _media(tmp_path)
+    media.rename_camera_media(m, "office", "study")
+    assert not (m / "baselines" / "office").exists()
+    assert sorted(p.name for p in (m / "baselines" / "study").iterdir()) == [
+        "door.jpg",
+        "door.json",
+    ]
+    assert _names(m) == [
+        "office_notes.txt",
+        "office_test_20261103-111200.jpg",
+        "officex_20261103-111200.jpg",
+        "study_20261103-111200-2.jpg",
+        "study_20261103-111200.jpg",
+        "study_20261103-111300.mp4",
+    ]
+
+
+def test_rename_camera_media_undo_restores(tmp_path):
+    m = _media(tmp_path)
+    before = sorted(str(p.relative_to(m)) for p in m.rglob("*"))
+    undo = media.rename_camera_media(m, "office", "study")
+    undo()
+    assert sorted(str(p.relative_to(m)) for p in m.rglob("*")) == before
+
+
+def test_rename_camera_media_nothing_to_move(tmp_path):
+    media.rename_camera_media(tmp_path / "missing", "office", "study")()  # no error, undo no-op
+    m = tmp_path / "empty"
+    m.mkdir()
+    media.rename_camera_media(m, "office", "study")
+    assert list(m.iterdir()) == []
+
+
+@pytest.mark.parametrize("leftover", ["baselines/study/old.jpg", "study_20250101-000000.jpg"])
+def test_rename_camera_media_refuses_existing_target_media(tmp_path, leftover):
+    m = _media(tmp_path)
+    (m / leftover).parent.mkdir(parents=True, exist_ok=True)
+    (m / leftover).write_bytes(b"x")
+    before = sorted(str(p.relative_to(m)) for p in m.rglob("*"))
+    with pytest.raises(ValueError, match="'study' already exist"):
+        media.rename_camera_media(m, "office", "study")
+    assert sorted(str(p.relative_to(m)) for p in m.rglob("*")) == before
+
+
+def test_rename_camera_media_failure_rolls_back(tmp_path, monkeypatch):
+    m = _media(tmp_path)
+    before = sorted(str(p.relative_to(m)) for p in m.rglob("*"))
+    real_rename = media.os.rename
+    calls = 0
+
+    def flaky(src, dst):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise PermissionError(13, "Permission denied")
+        real_rename(src, dst)
+
+    monkeypatch.setattr(media.os, "rename", flaky)
+    with pytest.raises(MediaError, match="could not move media of 'office' to 'study'"):
+        media.rename_camera_media(m, "office", "study")
+    monkeypatch.setattr(media.os, "rename", real_rename)
+    assert sorted(str(p.relative_to(m)) for p in m.rglob("*")) == before
