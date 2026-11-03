@@ -9,10 +9,12 @@ from ipcam_mcp import store
 from ipcam_mcp.store import (
     UID_PATTERN,
     CameraMeta,
+    Period,
     camera_dir,
     check_deletable,
     delete_folder,
     ensure_folder,
+    enter_scene,
     folder_names,
     new_uid,
     read_meta,
@@ -69,7 +71,8 @@ def test_ensure_folder_creates_and_renames(tmp_path):
 
     ensure_folder(tmp_path, "k3f9x2ab", "study")
     second = read_meta(folder)
-    assert second == CameraMeta("k3f9x2ab", "study", first.created)
+    assert (second.name, second.created) == ("study", first.created)
+    assert second.current_scene == "office"  # a rename keeps the scene
 
 
 def test_ensure_folder_rewrites_unreadable_meta(tmp_path):
@@ -201,3 +204,65 @@ def test_check_deletable(tmp_path):
     check_deletable(media, "cccccccc")  # missing: nothing to refuse
     with pytest.raises(ValueError, match="symlink"):
         check_deletable(media, "bbbbbbbb")
+
+
+# --- scene periods ---
+
+T0 = datetime(2026, 1, 10, 9, 0).astimezone()
+T1 = datetime(2026, 11, 3, 13, 0).astimezone()
+
+
+def test_meta_without_scenes_has_implicit_period(tmp_path):
+    folder = tmp_path / "aaaaaaaa"
+    folder.mkdir()
+    (folder / "camera.json").write_text(
+        json.dumps({"uid": "aaaaaaaa", "name": "office", "created": T0.isoformat()})
+    )
+    meta = read_meta(folder)
+    assert meta.scenes == (Period("office", T0),)
+    assert meta.current_scene == "office"
+
+
+def test_meta_scenes_roundtrip(tmp_path):
+    meta = CameraMeta(
+        "aaaaaaaa", "door-left", T0, (Period("garage", T0), Period("front-door", T1, "bbbbbbbb"))
+    )
+    write_meta(tmp_path / "aaaaaaaa", meta)
+    assert read_meta(tmp_path / "aaaaaaaa") == meta
+    raw = json.loads((tmp_path / "aaaaaaaa" / "camera.json").read_text())
+    assert raw["scenes"][0] == {"scene": "garage", "since": T0.isoformat()}
+    assert raw["scenes"][1]["continues"] == "bbbbbbbb"
+    assert meta.current_scene == "front-door"
+
+
+@pytest.mark.parametrize(
+    "scenes",
+    [[{"scene": "x"}], [{"since": "2026-01-01T00:00:00"}], "nope", [{"scene": 5, "since": "x"}]],
+)
+def test_read_meta_bad_period_is_none(tmp_path, scenes):
+    (tmp_path / "camera.json").write_text(
+        json.dumps({"uid": "aaaaaaaa", "name": "o", "created": T0.isoformat(), "scenes": scenes})
+    )
+    assert read_meta(tmp_path) is None
+
+
+def test_ensure_folder_first_period_uses_scene(tmp_path):
+    folder = ensure_folder(tmp_path, "aaaaaaaa", "door-left", scene="front-door")
+    assert read_meta(folder).current_scene == "front-door"
+    ensure_folder(tmp_path, "aaaaaaaa", "door-l")  # rename keeps the scene
+    meta = read_meta(folder)
+    assert meta.name == "door-l" and meta.current_scene == "front-door"
+
+
+def test_enter_scene_appends_and_is_idempotent(tmp_path):
+    ensure_folder(tmp_path, "aaaaaaaa", "cam", scene="garage")
+    meta = enter_scene(tmp_path, "aaaaaaaa", "cam", "front-door")
+    assert [p.scene for p in meta.scenes] == ["garage", "front-door"]
+    assert enter_scene(tmp_path, "aaaaaaaa", "cam", "front-door") == meta
+    assert read_meta(tmp_path / "aaaaaaaa") == meta
+
+
+def test_enter_scene_continues_on_current_scene_updates_last_period(tmp_path):
+    ensure_folder(tmp_path, "aaaaaaaa", "cam", scene="garage")
+    meta = enter_scene(tmp_path, "aaaaaaaa", "cam", "garage", continues="bbbbbbbb")
+    assert len(meta.scenes) == 1 and meta.scenes[0].continues == "bbbbbbbb"
