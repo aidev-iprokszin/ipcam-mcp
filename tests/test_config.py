@@ -122,6 +122,19 @@ def test_missing_config_file(tmp_path):
         load_config(missing)
 
 
+def test_missing_config_file_ok_gives_empty_config(tmp_path):
+    cfg = load_config(tmp_path / "nope.toml", missing_ok=True)
+    assert cfg.devices == {}
+    assert cfg.allow_management is True
+
+
+def test_missing_ok_still_rejects_invalid_toml(tmp_path):
+    bad = tmp_path / "bad.toml"
+    bad.write_text("not = [valid")
+    with pytest.raises(ConfigError, match="invalid TOML"):
+        load_config(bad, missing_ok=True)
+
+
 def test_missing_secrets_file(tmp_path):
     missing = tmp_path / "missing.env"
     with pytest.raises(ConfigError) as e:

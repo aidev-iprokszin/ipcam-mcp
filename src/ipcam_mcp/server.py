@@ -149,10 +149,16 @@ def build_server(
 
         return await _guarded(run)
 
+    if manager is not None and allow_management:
+        empty_hint = "No cameras configured yet. Use add_camera to add one."
+    else:
+        empty_hint = "No cameras configured. Add one to cameras.toml, then restart or reload."
+
     @mcp.tool()
     async def list_cameras() -> str:
         """List configured cameras with their ids, types and capabilities (camera, ptz)."""
-        return json.dumps(registry.list())
+        cameras = registry.list()
+        return json.dumps(cameras) if cameras else empty_hint
 
     def resolve_source(from_path: str) -> Path:
         media = registry.media_dir.resolve()
@@ -439,8 +445,10 @@ def main(argv: list[str] | None = None) -> None:
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(message)s")
     path = config_path()
+    if not path.exists():
+        log.info("no config at %s yet; starting with no cameras (add_camera creates it)", path)
     try:
-        cfg = load_config(path)
+        cfg = load_config(path, missing_ok=True)
         registry = Registry(cfg)
     except ConfigError as e:
         print(f"ipcam-mcp: {e}", file=sys.stderr)

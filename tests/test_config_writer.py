@@ -1,4 +1,5 @@
 import os
+import stat
 import tomllib
 from pathlib import Path
 
@@ -41,6 +42,14 @@ def test_add_creates_cameras_table(tmp_path):
     p.write_text('media_dir = "/m"\n')
     add_section(p, "a", {"host_var": "H"})
     assert tomllib.loads(p.read_text()) == {"media_dir": "/m", "cameras": {"a": {"host_var": "H"}}}
+
+
+def test_add_creates_missing_file_and_private_dir(tmp_path):
+    p = tmp_path / "new" / "cameras.toml"
+    add_section(p, "a", {"host_var": "H"})
+    assert tomllib.loads(p.read_text()) == {"cameras": {"a": {"host_var": "H"}}}
+    assert stat.S_IMODE(p.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(p.stat().st_mode) == 0o600
 
 
 def test_add_duplicate_rejected(cfg):

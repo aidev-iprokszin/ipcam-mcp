@@ -52,6 +52,24 @@ async def test_list_cameras(registry):
     assert data == [{"id": "cam", "type": "fake", "capabilities": ["camera", "ptz"]}]
 
 
+async def test_list_cameras_empty_hints_add_camera(managed, tmp_path):
+    _, _, mgr = managed
+    empty = Registry(AppConfig(media_dir=tmp_path, devices={}))
+    async with Client(build_server(empty, mgr)) as client:
+        r = await client.call_tool("list_cameras", {})
+    assert not r.is_error
+    assert "No cameras configured" in text_of(r) and "add_camera" in text_of(r)
+
+
+async def test_list_cameras_empty_without_management_hints_config(managed, tmp_path):
+    _, _, mgr = managed
+    empty = Registry(AppConfig(media_dir=tmp_path, devices={}))
+    async with Client(build_server(empty, mgr, allow_management=False)) as client:
+        r = await client.call_tool("list_cameras", {})
+    assert "No cameras configured" in text_of(r)
+    assert "add_camera" not in text_of(r) and "cameras.toml" in text_of(r)
+
+
 async def test_snapshot_returns_image_and_path(registry, tmp_path):
     r = await call(registry, "camera_snapshot", {"camera": "cam"})
     assert not r.is_error
@@ -258,13 +276,42 @@ async def test_server_starts_without_contacting_devices(tmp_path):
     assert json.loads(text_of(r))[0]["id"] == "lr"
 
 
+def bad_config(tmp_path, monkeypatch) -> Path:
+    bad = tmp_path / "bad.toml"
+    bad.write_text("not = [valid")
+    monkeypatch.setenv("IPCAM_MCP_CONFIG", str(bad))
+    return bad
+
+
 def test_main_bad_config_exits_2(tmp_path, monkeypatch, capsys):
-    missing = tmp_path / "nope.toml"
-    monkeypatch.setenv("IPCAM_MCP_CONFIG", str(missing))
+    bad = bad_config(tmp_path, monkeypatch)
     with pytest.raises(SystemExit) as e:
         main([])
     assert e.value.code == 2
-    assert str(missing) in capsys.readouterr().err
+    assert str(bad) in capsys.readouterr().err
+
+
+def test_main_missing_config_starts_empty(tmp_path, monkeypatch, caplog):
+    missing = tmp_path / "new" / "cameras.toml"
+    monkeypatch.setenv("IPCAM_MCP_CONFIG", str(missing))
+    started = {}
+
+    class StubServer:
+        def run(self, transport, **kw):
+            started["transport"] = transport
+
+    def fake_build(registry, manager, allow_management):
+        started.update(cameras=registry.list(), manager=manager, allow=allow_management)
+        return StubServer()
+
+    monkeypatch.setattr(server_mod, "build_server", fake_build)
+    with caplog.at_level("INFO", logger="ipcam_mcp"):
+        main([])
+    assert started["transport"] == "stdio"
+    assert started["cameras"] == [] and started["allow"] is True
+    assert started["manager"] is not None
+    assert str(missing) in caplog.text and "add_camera" in caplog.text
+    assert not missing.exists()
 
 
 # --- camera management tools ---
@@ -639,34 +686,34 @@ async def test_baseline_and_compare_tolerate_unreadable_position(registry, monke
 
 
 def test_main_refuses_remote_http_host(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("IPCAM_MCP_CONFIG", str(tmp_path / "missing.toml"))
+    bad_config(tmp_path, monkeypatch)
     with pytest.raises(SystemExit) as e:
         main(["--transport", "http", "--host", "0.0.0.0"])
     assert e.value.code == 2
     err = capsys.readouterr().err
-    assert "--allow-remote" in err and "config file not found" not in err
+    assert "--allow-remote" in err and "invalid TOML" not in err
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
 def test_main_allows_loopback_http_host(monkeypatch, tmp_path, capsys, host):
-    monkeypatch.setenv("IPCAM_MCP_CONFIG", str(tmp_path / "missing.toml"))
+    bad_config(tmp_path, monkeypatch)
     with pytest.raises(SystemExit):
         main(["--transport", "http", "--host", host])
-    assert "config file not found" in capsys.readouterr().err  # got past the host check
+    assert "invalid TOML" in capsys.readouterr().err  # got past the host check
 
 
 def test_main_allow_remote_flag(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("IPCAM_MCP_CONFIG", str(tmp_path / "missing.toml"))
+    bad_config(tmp_path, monkeypatch)
     with pytest.raises(SystemExit):
         main(["--transport", "http", "--host", "0.0.0.0", "--allow-remote"])
-    assert "config file not found" in capsys.readouterr().err
+    assert "invalid TOML" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("host", ["127.0.0.2", "0:0:0:0:0:0:0:1"])
 def test_main_refuses_loopback_without_sdk_protection(monkeypatch, tmp_path, capsys, host):
     """The MCP SDK only enables DNS-rebinding protection for these exact strings:
     127.0.0.1, localhost, ::1. Other loopback spellings would run unprotected."""
-    monkeypatch.setenv("IPCAM_MCP_CONFIG", str(tmp_path / "missing.toml"))
+    bad_config(tmp_path, monkeypatch)
     with pytest.raises(SystemExit) as e:
         main(["--transport", "http", "--host", host])
     assert e.value.code == 2 and "--allow-remote" in capsys.readouterr().err

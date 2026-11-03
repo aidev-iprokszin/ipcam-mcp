@@ -513,3 +513,69 @@ async def test_reload_returns_list(env):
     assert await mgr.reload() == [
         {"id": "desk", "type": "tapo_onvif", "capabilities": ["camera", "ptz"]}
     ]
+
+
+# --- first run: no cameras.toml yet ---
+
+
+@pytest.fixture
+def fresh(tmp_path, monkeypatch) -> tuple[Path, Manager, Registry, Path]:
+    """No config file yet; HOME points at tmp so the default secrets_dir lands there."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = tmp_path / ".config" / "ipcam-mcp" / "cameras.toml"
+    registry = Registry(
+        load_config(cfg, missing_ok=True),
+        adapters={"tapo_onvif": FakeCamPTZ, "onvif": FakeCamPTZ},
+    )
+    mgr = Manager(cfg, registry, probe=FakeProbe())
+    return cfg, mgr, registry, tmp_path / ".config" / "ipcam-mcp" / "secrets"
+
+
+async def test_add_creates_missing_config(fresh):
+    cfg, mgr, registry, secrets_dir = fresh
+
+    result = await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+
+    assert "added 'garage'" in result
+    assert tomllib.loads(cfg.read_text())["cameras"]["garage"]["type"] == "onvif"
+    assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
+    assert (secrets_dir / "garage.env").exists()
+    assert ids(registry) == ["garage"]
+
+
+async def test_add_file_mode_with_missing_config(fresh):
+    cfg, mgr, _, secrets_dir = fresh
+    result = await mgr.add("garage", "10.0.0.5", None)
+    assert "Fill in USER and PASSWORD" in result
+    assert (secrets_dir / "garage.env").exists()
+    assert not cfg.exists()
+
+
+async def test_add_failure_with_missing_config_leaves_no_file(fresh, monkeypatch):
+    cfg, mgr, registry, secrets_dir = fresh
+
+    def broken_reload(config):
+        raise ConfigError("boom")
+
+    monkeypatch.setattr(registry, "reload", broken_reload)
+    with pytest.raises(ConfigError, match="boom"):
+        await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    assert not cfg.exists()
+    assert not (secrets_dir / "garage.env").exists()
+    assert ids(registry) == []
+
+
+async def test_reload_with_missing_config_is_empty(fresh):
+    _, mgr, _, _ = fresh
+    assert await mgr.reload() == []
+
+
+@pytest.mark.parametrize("op", ["rename", "remove"])
+async def test_rename_remove_with_missing_config_not_found(fresh, op):
+    cfg, mgr, _, _ = fresh
+    with pytest.raises(ValueError, match="'garage' not found"):
+        if op == "rename":
+            await mgr.rename("garage", "carport")
+        else:
+            await mgr.remove("garage")
+    assert not cfg.exists()

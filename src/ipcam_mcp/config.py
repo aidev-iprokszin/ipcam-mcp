@@ -42,12 +42,16 @@ def config_path() -> Path:
     return Path(os.environ.get("IPCAM_MCP_CONFIG") or DEFAULT_CONFIG).expanduser()
 
 
-def load_config(path: Path | None = None) -> AppConfig:
+def load_config(path: Path | None = None, *, missing_ok: bool = False) -> AppConfig:
+    """Load ``path``. A missing file is an error unless ``missing_ok``: then it is an
+    empty config (no cameras, defaults), which ``add_camera`` can create on first run."""
     path = Path(path) if path is not None else config_path()
     try:
         raw = tomllib.loads(path.read_text())
     except FileNotFoundError:
-        raise ConfigError(f"config file not found: {path}") from None
+        if not missing_ok:
+            raise ConfigError(f"config file not found: {path}") from None
+        raw = {}
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"invalid TOML in {path}: {e}") from None
 
