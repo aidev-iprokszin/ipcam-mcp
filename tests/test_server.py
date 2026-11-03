@@ -1129,3 +1129,19 @@ async def test_compare_baseline_from_predecessor_two_steps(managed, tmp_path, mo
     assert text_of(r).startswith("Compared with baseline 'door'")
     assert f"reference taken by 'garage' {NOTE}" in text_of(r)
     assert "baseline 'x' not found; available: door" in text_of(missing)
+
+
+async def test_predecessor_baseline_skips_position_check(managed, tmp_path, monkeypatch):
+    """Another camera's PTZ position says nothing about this camera's."""
+    from ipcam_mcp.baselines import save_baseline
+
+    _, reg, manager = managed
+    old = leftover(tmp_path / "media")
+    save_baseline(old, "door", old / "garage_20250101-000000.jpg", "high", (5.0, 5.0), "garage")
+    reg.folder("office")
+    await manager.set_scene("office", "garage", successor=await choose(0))
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager)) as client:
+        r = await client.call_tool("camera_compare", {"camera": "office", "baseline": "door"})
+    assert not r.is_error, text_of(r)
+    assert "moved" not in text_of(r)

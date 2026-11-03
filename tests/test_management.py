@@ -1148,3 +1148,17 @@ async def test_delete_description_mentions_successor(env):
 
     assert await mgr.delete("garage", confirm) == "cancelled; nothing was deleted"
     assert seen[0].endswith("; predecessor of 'office' in 'garage'")
+
+
+async def test_successor_labels_unique_for_twins(env):
+    """Two removed cameras with the same name, date and counts must stay distinguishable."""
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media", "yyyyyyyy")
+    removed_camera(cfg.parent / "media", "zzzzzzzz")
+    mgr, _, _ = make_manager(cfg)
+    successor = asking(None)
+    await mgr.add(
+        "garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)), successor=successor
+    )
+    labels = successor.calls[0][1]
+    assert labels == [f"{GARAGE_LABEL} [yyyyyyyy]", f"{GARAGE_LABEL} [zzzzzzzz]"]

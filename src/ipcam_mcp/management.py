@@ -272,16 +272,22 @@ class Manager:
                 f"; '{scene}' has earlier cameras ({names}); declare a successor with set_scene "
                 "from a client that shows forms"
             )
+        labels = [
+            f"Replaces '{c.name}' (added {c.created:%Y-%m-%d}, "
+            f"{_plural(c.snapshots, 'snapshot')}, {_plural(c.baselines, 'baseline')}): "
+            "continue its compare and baselines"
+            for c in found
+        ]
+        # The form is a choice of labels: twins get their uid, or one could not be picked.
+        labels = [
+            f"{label} [{c.uid}]" if labels.count(label) > 1 else label
+            for label, c in zip(labels, found, strict=True)
+        ]
         answer = await successor(
             f"Camera '{camera}' is entering scene '{scene}', which earlier cameras watched. "
             "Does it replace one of them? A replacement continues the old camera's compare "
             "history and baselines.",
-            [
-                f"Replaces '{c.name}' (added {c.created:%Y-%m-%d}, "
-                f"{_plural(c.snapshots, 'snapshot')}, {_plural(c.baselines, 'baseline')}): "
-                "continue its compare and baselines"
-                for c in found
-            ],
+            labels,
         )
         if answer is None:
             raise _Cancelled

@@ -345,7 +345,9 @@ def build_server(
             ref = ref_path.read_bytes()
             path = await adapter.snapshot(quality)
             moved = False
-            if base is not None and base.position is not None and isinstance(adapter, PTZ):
+            # A predecessor's PTZ position says nothing about this camera's.
+            own_base = base is not None and owner is None
+            if own_base and base.position is not None and isinstance(adapter, PTZ):
                 now = await _position(adapter)
                 if now is not None:
                     moved = (
