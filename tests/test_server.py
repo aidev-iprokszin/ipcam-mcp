@@ -465,7 +465,7 @@ async def test_management_tools_present_when_allowed(managed):
     async with Client(server) as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
     props = tools["add_camera"].input_schema["properties"]
-    assert set(props) == {"id", "host", "credentials_via", "onvif_port"}
+    assert set(props) == {"name", "host", "credentials_via", "onvif_port"}
 
 
 async def test_add_camera_via_form(managed):
@@ -473,7 +473,7 @@ async def test_add_camera_via_form(managed):
     cb = answering("accept", {"username": "u", "password": "s3cr3t"})
     server = build_server(reg, manager, allow_management=True)
     async with Client(server, mode="legacy", elicitation_callback=cb) as client:
-        r = await client.call_tool("add_camera", {"id": "garage", "host": "10.0.0.7"})
+        r = await client.call_tool("add_camera", {"name": "garage", "host": "10.0.0.7"})
         listed = await client.call_tool("list_cameras", {})
     assert not r.is_error
     assert "added 'garage'" in text_of(r)
@@ -503,7 +503,7 @@ async def test_add_camera_form_declined(managed):
     _, reg, manager = managed
     server = build_server(reg, manager, allow_management=True)
     async with Client(server, mode="legacy", elicitation_callback=answering("decline")) as client:
-        r = await client.call_tool("add_camera", {"id": "garage", "host": "10.0.0.7"})
+        r = await client.call_tool("add_camera", {"name": "garage", "host": "10.0.0.7"})
     assert not r.is_error
     assert "nothing was changed" in text_of(r)
     assert "garage" not in [c["id"] for c in reg.list()]
@@ -518,7 +518,7 @@ async def test_add_camera_form_error_gives_next_step(managed, tmp_path):
 
     server = build_server(reg, manager, allow_management=True)
     async with Client(server, mode="legacy", elicitation_callback=cb) as client:
-        r = await client.call_tool("add_camera", {"id": "garage", "host": "10.0.0.7"})
+        r = await client.call_tool("add_camera", {"name": "garage", "host": "10.0.0.7"})
     assert r.is_error
     assert 'retry with credentials_via="file"' in text_of(r)
     assert "nothing was changed" in text_of(r)
@@ -534,7 +534,7 @@ async def test_add_camera_invalid_form_content_does_not_leak(managed, tmp_path):
     cb = answering("accept", form)
     server = build_server(reg, manager, allow_management=True)
     async with Client(server, mode="legacy", elicitation_callback=cb) as client:
-        r = await client.call_tool("add_camera", {"id": "garage", "host": "10.0.0.7"})
+        r = await client.call_tool("add_camera", {"name": "garage", "host": "10.0.0.7"})
     assert r.is_error
     assert "does not match the requested schema" in text_of(r)  # the SDK's sanitized message
     assert "admin_xyz" not in text_of(r)
@@ -547,7 +547,7 @@ async def test_add_camera_without_elicitation_falls_back(managed, tmp_path):
     _, reg, manager = managed
     server = build_server(reg, manager, allow_management=True)
     async with Client(server) as client:
-        r = await client.call_tool("add_camera", {"id": "garage", "host": "10.0.0.7"})
+        r = await client.call_tool("add_camera", {"name": "garage", "host": "10.0.0.7"})
     assert not r.is_error
     assert text_of(r).startswith("This client can't show login forms")
     assert str(tmp_path / "secrets" / "garage.env") in text_of(r)
@@ -558,7 +558,7 @@ async def test_add_camera_modern_protocol_falls_back(managed, tmp_path):
     cb = answering("accept", {"username": "u", "password": "s3cr3t"})
     server = build_server(reg, manager, allow_management=True)
     async with Client(server, elicitation_callback=cb) as client:  # negotiates 2026-07-28
-        r = await client.call_tool("add_camera", {"id": "garage", "host": "10.0.0.7"})
+        r = await client.call_tool("add_camera", {"name": "garage", "host": "10.0.0.7"})
     assert not r.is_error
     assert text_of(r).startswith("This client can't show login forms")
     assert str(tmp_path / "secrets" / "garage.env") in text_of(r)
@@ -570,7 +570,7 @@ async def test_add_camera_explicit_file_mode_two_step(managed, tmp_path):
     env_file = tmp_path / "secrets" / "garage.env"
     cb = answering("accept", {"username": "u", "password": "s3cr3t"})
     server = build_server(reg, manager, allow_management=True)
-    args = {"id": "garage", "host": "10.0.0.7", "credentials_via": "file"}
+    args = {"name": "garage", "host": "10.0.0.7", "credentials_via": "file"}
     async with Client(server, mode="legacy", elicitation_callback=cb) as client:
         first = await client.call_tool("add_camera", args)
         assert not first.is_error
@@ -578,7 +578,7 @@ async def test_add_camera_explicit_file_mode_two_step(managed, tmp_path):
         assert 'credentials_via="file"' in text_of(first)
 
         # A default (form) retry must not prompt again; it points back to file mode.
-        retry = await client.call_tool("add_camera", {"id": "garage", "host": "10.0.0.7"})
+        retry = await client.call_tool("add_camera", {"name": "garage", "host": "10.0.0.7"})
         assert retry.is_error
         assert 'credentials_via="file"' in text_of(retry)
         assert cb.calls == []

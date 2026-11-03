@@ -367,14 +367,14 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
 
     @mcp.tool()
     async def add_camera(
-        id: str,
+        name: str,
         host: str,
         ctx: Context,
         credentials_via: Literal["form", "file"] = "form",
         onvif_port: int | None = None,
     ) -> str:
         """Add an ONVIF/RTSP IP camera. Ask the user for the camera's IP address (from its app
-        or router) and pick a short id such as "garage".
+        or router) and pick a short name such as "garage".
 
         Credentials are never passed as arguments: by default the user is shown a login form;
         with credentials_via="file" a secrets file is created for the user to fill in, then
@@ -396,16 +396,16 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
 
         async def run() -> str:
             if credentials_via == "file":
-                return await manager.add(id, host, None, onvif_port)
+                return await manager.add(name, host, None, onvif_port)
             if not _can_show_form(ctx):
-                return NO_FORM_PREFIX + await manager.add(id, host, None, onvif_port)
-            return await manager.add(id, host, prompt, onvif_port)
+                return NO_FORM_PREFIX + await manager.add(name, host, None, onvif_port)
+            return await manager.add(name, host, prompt, onvif_port)
 
         return await _guarded(run)
 
     @mcp.tool()
     async def rename_camera(old: str, new: str) -> str:
-        """Change a camera's id. Its baselines, snapshots and recordings move to the new id."""
+        """Change a camera's name. Its baselines, snapshots and recordings stay with it."""
         return await _guarded(lambda: manager.rename(old, new))
 
     @mcp.tool()

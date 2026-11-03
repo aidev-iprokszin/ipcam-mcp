@@ -1,15 +1,17 @@
 import asyncio
-import os
 import re
 import stat
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from conftest import FakeCamPTZ, uid_for
 from dotenv import dotenv_values
 
+from ipcam_mcp import store
 from ipcam_mcp.adapters.onvif import DeviceInfo
+from ipcam_mcp.baselines import latest_snapshot
 from ipcam_mcp.config import load_config
 from ipcam_mcp.errors import ConfigError, DeviceError
 from ipcam_mcp.management import (
@@ -20,7 +22,7 @@ from ipcam_mcp.management import (
     validate_id,
 )
 from ipcam_mcp.registry import Registry
-from ipcam_mcp.store import UID_PATTERN
+from ipcam_mcp.store import UID_PATTERN, CameraMeta, read_meta, write_meta
 
 USER = "camuser"
 PASSWORD = "s3cr3t-pw"
@@ -429,49 +431,6 @@ async def test_rename_reload_failure_rolls_back(env):
     assert ids(registry) == ["office", "garage"]
 
 
-def _office_media(cfg: Path) -> Path:
-    media = cfg.parent / "media"
-    (media / "baselines" / "office").mkdir(parents=True)
-    (media / "baselines" / "office" / "door.jpg").write_bytes(b"jpg")
-    (media / "baselines" / "office" / "door.json").write_text("{}")
-    (media / "office_20261103-111200.jpg").write_bytes(b"jpg")
-    return media
-
-
-async def test_rename_refuses_when_new_id_has_media(env):
-    cfg, _, _ = env
-    media = _office_media(cfg)
-    (media / "front_20250101-000000.jpg").write_bytes(b"old")
-    before = cfg.read_bytes()
-    mgr, registry, _ = make_manager(cfg)
-
-    with pytest.raises(ValueError, match="'front' already exist"):
-        await mgr.rename("office", "front")
-    assert cfg.read_bytes() == before
-    assert (media / "office_20261103-111200.jpg").exists()
-    assert ids(registry) == ["office"]
-
-
-async def test_rename_reload_failure_moves_media_back(env):
-    cfg, _, _ = env
-    media = _office_media(cfg)
-    calls = 0
-
-    def load(path: Path):
-        nonlocal calls
-        calls += 1
-        if calls == 2:  # rename: 1, then the reload (2)
-            raise ConfigError("boom")
-        return load_config(path)
-
-    mgr, _, _ = make_manager(cfg, load=load)
-    with pytest.raises(ConfigError, match="boom"):
-        await mgr.rename("office", "front")
-    assert (media / "baselines" / "office" / "door.jpg").exists()
-    assert (media / "office_20261103-111200.jpg").exists()
-    assert not (media / "baselines" / "front").exists()
-
-
 async def test_rename_shared_secrets_untouched(env):
     cfg, _, shared = env
     mgr, registry, _ = make_manager(cfg)
@@ -640,31 +599,6 @@ async def test_rename_remove_with_missing_config_not_found(fresh, op):
     assert not cfg.exists()
 
 
-async def test_rename_secrets_move_failure_moves_media_back(env, monkeypatch):
-    cfg, secrets_dir, _ = env
-    mgr, registry, _ = make_manager(cfg)
-    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
-    media = cfg.parent / "media"
-    media.mkdir(exist_ok=True)
-    (media / "garage_20261103-111200.jpg").write_bytes(b"jpg")
-    before = cfg.read_bytes()
-    real_rename = os.rename
-
-    def fail_on_env(src, dst):
-        if str(src).endswith(".env"):
-            raise PermissionError(13, "Permission denied")
-        real_rename(src, dst)
-
-    monkeypatch.setattr(os, "rename", fail_on_env)
-    with pytest.raises(ConfigError, match="could not rename"):
-        await mgr.rename("garage", "carport")
-    assert (media / "garage_20261103-111200.jpg").exists()
-    assert not (media / "carport_20261103-111200.jpg").exists()
-    assert (secrets_dir / "garage.env").exists()
-    assert cfg.read_bytes() == before
-    assert ids(registry) == ["office", "garage"]
-
-
 def test_prepare_config_assigns_and_loads(env):
     cfg, _, _ = env
     cfg.write_text(cfg.read_text().replace(f'uid = "{uid_for("office")}"\n', ""))
@@ -676,3 +610,55 @@ def test_prepare_config_assigns_and_loads(env):
 
 def test_prepare_config_missing_file_is_empty(tmp_path):
     assert prepare_config(tmp_path / "nope.toml").devices == {}
+
+
+# --- uids and per-camera folders ---
+
+
+async def test_add_writes_uid_and_camera_json(env):
+    cfg, _, _ = env
+    mgr, _, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    uid = tomllib.loads(cfg.read_text())["cameras"]["garage"]["uid"]
+    assert re.fullmatch(UID_PATTERN, uid)
+    assert read_meta(cfg.parent / "media" / uid).name == "garage"
+
+
+async def test_add_uid_avoids_existing_folders(env, monkeypatch):
+    cfg, _, _ = env
+    (cfg.parent / "media" / "aaaaaaaa").mkdir(parents=True)
+    chars = iter("aaaaaaaabbbbbbbb")
+    monkeypatch.setattr(store.secrets, "choice", lambda _alphabet: next(chars))
+    mgr, _, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    assert tomllib.loads(cfg.read_text())["cameras"]["garage"]["uid"] == "bbbbbbbb"
+
+
+async def test_rename_moves_no_files_and_updates_meta(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    (folder / "office_20261103-111200.jpg").write_bytes(b"jpg")
+
+    result = await mgr.rename("office", "front")
+
+    assert result == "renamed 'office' to 'front'"
+    assert read_meta(folder).name == "front"  # before registry.folder() could rewrite it
+    assert registry.folder("front") == folder
+    assert latest_snapshot(folder) == folder / "office_20261103-111200.jpg"
+    assert sorted(p.name for p in folder.parent.iterdir()) == [uid_for("office")]
+
+
+async def test_rename_to_name_of_removed_camera_notes_it(env):
+    cfg, _, _ = env
+    media = cfg.parent / "media"
+    old = media / "zzzzzzzz"
+    write_meta(old, CameraMeta("zzzzzzzz", "front", datetime(2025, 1, 1).astimezone()))
+    (old / "front_20250101-000000.jpg").write_bytes(b"old")
+    mgr, registry, _ = make_manager(cfg)
+
+    result = await mgr.rename("office", "front")
+
+    assert "removed camera named 'front'" in result
+    assert read_meta(old).name == "front" and (old / "front_20250101-000000.jpg").exists()
+    assert registry.folder("front") == media / uid_for("office")

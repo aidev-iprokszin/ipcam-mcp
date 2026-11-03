@@ -6,6 +6,7 @@ appear in returned strings or raised messages.
 """
 
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import os
@@ -18,7 +19,7 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-from ipcam_mcp import config_writer, media, store
+from ipcam_mcp import config_writer, store
 from ipcam_mcp.adapters import onvif
 from ipcam_mcp.adapters.onvif import DeviceInfo
 from ipcam_mcp.config import AppConfig, load_config, media_dir_of
@@ -154,6 +155,7 @@ class Manager:
             await self._mutate(
                 lambda: config_writer.add_section(self._config_path, cam_id, section), undo
             )
+            store.ensure_folder(config.media_dir, section["uid"], cam_id)
             caps = next(c["capabilities"] for c in self._registry.list() if c["id"] == cam_id)
             return (
                 f"added '{cam_id}' ({info.manufacturer} {info.model}); "
@@ -175,27 +177,30 @@ class Manager:
             if managed and new_path.exists():
                 raise ConfigError(f"secrets file already exists: {new_path}")
 
-            # Wait for a running snapshot/recording of the camera: its file is moved next.
-            async with self._registry.lock(old):
-                undo = [media.rename_camera_media(config.media_dir, old, new)]
-                updates: dict[str, str] | None = None
-                if managed:
-                    try:
-                        os.rename(old_path, new_path)
-                    except OSError as exc:
-                        undo[0]()
-                        raise ConfigError(
-                            f"could not rename {old_path} to {new_path}: {exc.strerror or exc}"
-                        ) from exc
-                    undo.append(lambda: os.rename(new_path, old_path))
-                    updates = {"secrets_file": str(new_path)}
+            undo: list[Callable[[], None]] = []
+            updates: dict[str, str] | None = None
+            if managed:
+                try:
+                    os.rename(old_path, new_path)
+                except OSError as exc:
+                    raise ConfigError(
+                        f"could not rename {old_path} to {new_path}: {exc.strerror or exc}"
+                    ) from exc
+                undo.append(lambda: os.rename(new_path, old_path))
+                updates = {"secrets_file": str(new_path)}
 
-                await self._mutate(
-                    lambda: config_writer.rename_section(self._config_path, old, new, updates),
-                    undo,
-                    close_retired=False,  # needs the camera lock held here
+            await self._mutate(
+                lambda: config_writer.rename_section(self._config_path, old, new, updates), undo
+            )
+            # Media stay in the camera's uid folder; only its recorded name changes.
+            uid = config.devices[old].uid
+            if (config.media_dir / uid).is_dir():
+                store.ensure_folder(config.media_dir, uid, new)
+            if self._removed_named(config, new):
+                return (
+                    f"renamed '{old}' to '{new}'; an earlier, removed camera named '{new}' "
+                    "keeps its files separately"
                 )
-            await self._registry.close_retired()
             return f"renamed '{old}' to '{new}'"
 
     async def remove(self, cam_id: str) -> str:
@@ -253,6 +258,17 @@ class Manager:
         except FileNotFoundError:
             return {}
         return tomllib.loads(text).get("cameras", {})
+
+    @staticmethod
+    def _removed_named(config: AppConfig, name: str) -> bool:
+        """Whether a removed camera (uid folder not in the config) was called ``name``."""
+        configured = {d.uid for d in config.devices.values()}
+        for uid in store.folder_names(config.media_dir) - configured:
+            with contextlib.suppress(ValueError):
+                meta = store.read_meta(store.camera_dir(config.media_dir, uid))
+                if meta is not None and meta.name == name:
+                    return True
+        return False
 
     @staticmethod
     def _is_managed(spec: dict[str, Any], managed_path: Path) -> bool:

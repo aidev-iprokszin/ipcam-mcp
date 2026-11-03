@@ -133,7 +133,8 @@ async def test_live_add_snapshot_remove(tmp_path):
     try:
         path = await registry.get("office_test", "camera").snapshot("high")
         assert path.is_file() and path.stat().st_size > 0
-        assert tmp_path in path.parents
+        assert path.parent == registry.folder("office_test")
+        assert path.parent.parent == tmp_path
     finally:
         await manager.remove("office_test")
     assert copy.read_bytes() == original
