@@ -261,7 +261,8 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
   files, such as `IMG_…` photos, stay. A file whose target already exists is left in place with
   a warning. Once the move has finished, an empty `.flat-layout-migrated` file in `media_dir`
   keeps it from running again; delete it to repeat the migration. `cameras.toml` must be
-  writable for the uids; a read-only file is not changed and the server does not start.
+  writable while cameras still need a uid: a read-only file is not changed, and the server
+  stops with an error.
 - Every camera is in a scene, by default its name, so existing snapshots and baselines stay in
   scenes named after their cameras. `camera_compare` now compares only within the camera's
   current scene.
