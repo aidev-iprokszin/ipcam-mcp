@@ -1364,3 +1364,15 @@ async def test_failure_after_commit_still_succeeds(env, caplog):
         result = await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
     assert result.startswith("added 'garage'")
     assert "could not record scene changes" in caplog.text
+
+
+def test_hand_rename_with_read_only_config_still_loads(env, caplog):
+    cfg, _, _ = env
+    folder = Registry(prepare_config(cfg), adapters={"tapo_onvif": FakeCamPTZ}).folder("office")
+    cfg.write_text(cfg.read_text().replace("[cameras.office]", "[cameras.desk]"))
+    cfg.chmod(0o444)
+    with caplog.at_level("WARNING", logger="ipcam_mcp"):
+        config = prepare_config(cfg)
+    assert "desk" in config.devices
+    assert 'scene = "office"' in caplog.text
+    assert [p.scene for p in read_meta(folder).scenes] == ["office"]

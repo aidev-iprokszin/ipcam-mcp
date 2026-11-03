@@ -16,7 +16,12 @@ def put(path, data=b"x"):
 
 
 def tree(root):
-    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
+    """Files under root, without the migration marker."""
+    return sorted(
+        str(p.relative_to(root))
+        for p in root.rglob("*")
+        if p.is_file() and p.name != migrate.MARKER
+    )
 
 
 def office_flat(m):
@@ -100,7 +105,7 @@ def test_missing_or_empty_media_dir_noop(tmp_path):
     assert not (tmp_path / "missing").exists()
     (tmp_path / "empty").mkdir()
     assert migrate_flat_layout(tmp_path / "empty", {"office": U}).moved == {}
-    assert list((tmp_path / "empty").iterdir()) == []
+    assert [p.name for p in (tmp_path / "empty").iterdir()] == [migrate.MARKER]
 
 
 def test_existing_target_skipped_not_overwritten(tmp_path):
@@ -184,3 +189,44 @@ def test_migrated_folder_starts_in_configured_scene(tmp_path):
     office_flat(m)
     migrate_flat_layout(m, {"office": U}, scenes={"office": "desk"})
     assert read_meta(m / U).current_scene == "desk"
+
+
+def test_photos_with_other_names_untouched(tmp_path):
+    m = tmp_path / "media"
+    put(m / "IMG_20240101-120000.jpg")
+    put(m / "PXL_20240101-120000-2.mp4")
+    report = migrate_flat_layout(m, {"office": U})
+    assert (m / "IMG_20240101-120000.jpg").exists() and (m / "PXL_20240101-120000-2.mp4").exists()
+    assert report.moved == {} and report.removed_cameras == []
+
+
+def test_marker_written_after_clean_run_and_stops_later_runs(tmp_path):
+    m = tmp_path / "media"
+    put(m / "office_20261103-111200.jpg", b"flat")
+    put(m / U / "office_20261103-111200.jpg", b"already")
+    report = migrate_flat_layout(m, {"office": U})
+    assert report.skipped and (m / migrate.MARKER).is_file()
+    put(m / "photo_20240101-120000.jpg")
+    report = migrate_flat_layout(m, {"office": U})
+    assert report == migrate.MigrationReport()
+    assert (m / "photo_20240101-120000.jpg").exists()
+
+
+def test_no_marker_after_error(tmp_path, monkeypatch):
+    m = tmp_path / "media"
+    office_flat(m)
+
+    def fail(src, dst):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(migrate.os, "rename", fail)
+    assert migrate_flat_layout(m, {"office": U}).error is not None
+    assert not (m / migrate.MARKER).exists()
+
+
+def test_configured_name_outside_pattern_still_moves(tmp_path):
+    m = tmp_path / "media"
+    put(m / "Office_20240101-120000.jpg")
+    report = migrate_flat_layout(m, {"Office": U})
+    assert report.moved == {"Office": 1}
+    assert (m / U / "Office_20240101-120000.jpg").exists()

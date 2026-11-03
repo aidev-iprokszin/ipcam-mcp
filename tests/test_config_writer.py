@@ -303,3 +303,21 @@ def test_set_key_keeps_comments(tmp_path):
     assert "# keep" in p.read_text() and "# top" in p.read_text()
     with pytest.raises(ConfigError, match="not found"):
         set_key(p, "nope", "scene", "x")
+
+
+def test_atomic_write_refuses_read_only_file(tmp_path):
+    p = tmp_path / "cameras.toml"
+    p.write_text("old")
+    p.chmod(0o444)
+    with pytest.raises(ConfigError, match="read-only"):
+        atomic_write(p, "new")
+    assert p.read_text() == "old"
+    assert [x.name for x in tmp_path.iterdir()] == ["cameras.toml"]
+
+
+def test_ensure_uids_on_read_only_file_explains(tmp_path):
+    p = tmp_path / "cameras.toml"
+    p.write_text('[cameras.office]\ntype = "onvif"\n')
+    p.chmod(0o444)
+    with pytest.raises(ConfigError, match="read-only.*must be writable"):
+        ensure_uids(p, set())
