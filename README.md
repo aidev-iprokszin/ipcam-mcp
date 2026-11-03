@@ -51,7 +51,7 @@ scene. Moving a camera to another scene starts a new period in its `camera.json`
 baselines from before the move stay with the old scene, and `camera_compare` only compares within
 the current one, so it never reports a different place as a change.
 
-**Replacing a camera.** When a camera enters a scene that removed cameras watched (with
+**Replacing a camera.** When a camera enters a scene where a removed camera was last (with
 `add_camera`, or `set_scene`), you are asked in a form whether it replaces one of them, is an
 additional camera, or to cancel. A replacement is its *successor*: until it has a snapshot of
 its own there, `camera_compare` compares with the old camera's newest snapshot in the scene, and
@@ -239,6 +239,19 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
   suffix.
 - Media files are never deleted. Clean up `~/.local/share/ipcam-mcp/media/` yourself.
 - HTTP transport has no authentication (see above).
+
+## Upgrading from 0.2
+
+- On the first start, every camera in `cameras.toml` gets a permanent `uid = "..."` line, and
+  existing snapshots, recordings and baselines move from the flat layout into per-camera folders,
+  `<media_dir>/<uid>/`. Files of cameras that are no longer configured are kept in folders of
+  their own (*removed cameras*: `list_cameras(include_removed=true)`, `delete_camera`).
+- Every camera is in a scene, by default its name, so existing snapshots and baselines stay in
+  scenes named after their cameras. `camera_compare` now compares only within the camera's
+  current scene.
+- `add_camera` and `remove_camera` take `name` instead of `id`.
+- New tools: `delete_camera`, `set_scene`, `list_scenes`, `scene_snapshot`, `scene_compare`,
+  `scene_timeline`. `camera_snapshot` accepts `from_path` without `camera`.
 
 ## Development
 
