@@ -20,6 +20,15 @@ from ipcam_mcp.media import mask_url, media_path, record_cmd, run_ffmpeg, snapsh
 from ipcam_mcp.store import ensure_folder
 
 log = logging.getLogger(__name__)
+# Closes still running after their caller was cancelled (a reference keeps them alive).
+_closing: set[asyncio.Task] = set()
+
+
+def _close_done(task: asyncio.Task) -> None:
+    _closing.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        log.debug("closing an ONVIF client failed: %s", type(task.exception()).__name__)
+
 
 PROBE_PORTS = (80, 2020)
 DEFAULT_RTSP_PORT = 554
@@ -278,8 +287,13 @@ class OnvifCamera:
             cam, self._cam = self._cam, None
             self._reset_services()
         if cam is not None and hasattr(cam, "close"):
+            # Shielded: a cancelled caller must not leave the session half closed, since the
+            # client is already dropped and a second aclose has nothing left to close.
+            task = asyncio.ensure_future(cam.close())
+            _closing.add(task)
+            task.add_done_callback(_close_done)
             with contextlib.suppress(Exception):
-                await cam.close()
+                await asyncio.shield(task)
 
     def _reset_services(self) -> None:
         pass

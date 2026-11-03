@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import gc
 from types import SimpleNamespace as NS
 
 import pytest
@@ -822,3 +823,49 @@ async def test_new_folder_starts_in_configured_scene(tmp_path, ffmpeg_calls):
     cam = make_camera(cfg, tmp_path, onvif_factory=lambda *a: None)
     await cam.snapshot("high")
     assert read_meta(tmp_path / "0livroom").current_scene == "porch"
+
+
+async def test_aclose_finishes_closing_when_cancelled(cam, ptz):
+    await cam.list_presets()  # connects
+    client = cam._cam
+    release = asyncio.Event()
+    closed = []
+
+    async def close():
+        await release.wait()
+        closed.append(1)
+
+    client.close = close
+    task = asyncio.create_task(cam.aclose())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert closed == [1]
+
+
+async def test_aclose_close_error_after_cancel_is_retrieved(cam, ptz, caplog):
+    await cam.list_presets()
+    client = cam._cam
+    release = asyncio.Event()
+
+    async def close():
+        await release.wait()
+        raise RuntimeError("boom")
+
+    client.close = close
+    task = asyncio.create_task(cam.aclose())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    gc.collect()
+    assert "exception was never retrieved" not in caplog.text
