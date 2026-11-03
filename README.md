@@ -109,7 +109,15 @@ predecessor.
    Steps 3 and 4 are optional if you let Claude add cameras: without a config file the server
    starts with no cameras, and `add_camera` (see [Managing cameras](#managing-cameras))
    creates `cameras.toml` and the camera's secrets file for your first camera.
-5. **Use it in Claude Code**: without a clone, register the PyPI package in your user scope:
+5. **Use it in Claude Code**: install the plugin, which runs the PyPI package with `uvx`:
+   ```
+   /plugin install ipcam --marketplace aidev-iprokszin/ipcam-mcp
+   ```
+   On Claude Code older than 2.1.275, run `/plugin marketplace add aidev-iprokszin/ipcam-mcp`,
+   then `/plugin install ipcam@ipcam-mcp`. Update it with `claude plugin update ipcam@ipcam-mcp`;
+   the plugin pins the server version, so this also updates the server.
+
+   Without the plugin, register the PyPI package in your user scope:
    ```
    claude mcp add ipcam -s user -- uvx ipcam-mcp
    ```

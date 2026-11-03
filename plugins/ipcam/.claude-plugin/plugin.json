@@ -1,0 +1,13 @@
+{
+  "name": "ipcam",
+  "version": "0.3.2",
+  "description": "See through and control the IP cameras on your local network (ONVIF/RTSP): snapshots, clips, pan/tilt, change detection",
+  "author": {
+    "name": "aidev-iprokszin",
+    "url": "https://github.com/aidev-iprokszin"
+  },
+  "homepage": "https://github.com/aidev-iprokszin/ipcam-mcp",
+  "repository": "https://github.com/aidev-iprokszin/ipcam-mcp",
+  "license": "MIT",
+  "keywords": ["ip-camera", "onvif", "rtsp", "ptz", "mcp"]
+}
