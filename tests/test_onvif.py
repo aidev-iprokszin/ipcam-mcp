@@ -822,3 +822,31 @@ async def test_new_folder_starts_in_configured_scene(tmp_path, ffmpeg_calls):
     cam = make_camera(cfg, tmp_path, onvif_factory=lambda *a: None)
     await cam.snapshot("high")
     assert read_meta(tmp_path / "0livroom").current_scene == "porch"
+
+
+@pytest.mark.parametrize("fail_close", [False, True])
+async def test_cancelled_aclose_finishes_client_close(cam, fail_close):
+    await cam.list_presets()
+    client = cam._cam
+    started, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def close():
+        calls.append(1)
+        started.set()
+        await release.wait()
+        finished.set()
+        if fail_close:
+            raise RuntimeError("close failed")
+
+    client.close = close
+    task = asyncio.create_task(cam.aclose())
+    await asyncio.wait_for(started.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await cam.aclose()  # Registry retries the retired adapter after cancellation.
+    release.set()
+    await asyncio.wait_for(finished.wait(), 1)
+    assert calls == [1]
+    assert cam._cam is None

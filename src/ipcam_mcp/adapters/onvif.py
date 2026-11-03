@@ -193,6 +193,7 @@ class OnvifCamera:
         self._onvif_factory = onvif_factory or _default_onvif_factory
         self._connect_lock = asyncio.Lock()
         self._cam: Any = None
+        self._close_tasks: set[asyncio.Task[None]] = set()
         self._profiles: list[str] = []
         self._ptz: Any = None
         self._use_continuous = False
@@ -278,8 +279,17 @@ class OnvifCamera:
             cam, self._cam = self._cam, None
             self._reset_services()
         if cam is not None and hasattr(cam, "close"):
-            with contextlib.suppress(Exception):
-                await cam.close()
+
+            async def close() -> None:
+                # Suppress failures inside the task, including after its caller leaves.
+                with contextlib.suppress(Exception):
+                    await cam.close()
+
+            task = asyncio.create_task(close())
+            # Shield alone only keeps a weak reference once the caller is cancelled.
+            self._close_tasks.add(task)
+            task.add_done_callback(self._close_tasks.discard)
+            await asyncio.shield(task)
 
     def _reset_services(self) -> None:
         pass
