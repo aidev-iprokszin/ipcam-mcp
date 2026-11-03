@@ -45,6 +45,20 @@ Every change starts with an issue, also for the maintainer:
    automatically.
 5. Merged pull requests appear in the next **release notes**, with your name.
 
+### Picking up an issue
+
+So that two people don't fix the same thing at once:
+
+1. Check that the issue has no assignee and no `in progress` label, and that no open pull
+   request already closes it.
+2. Comment that you'd like to work on it. The maintainer assigns the issue to you; the
+   `in progress` label then appears on its own. The maintainer does the same for their own work.
+3. If you get stuck or lose interest, say so in the issue, so it can be freed. An issue with no
+   visible progress for about two weeks may be unassigned and offered to others.
+
+An issue labelled `blocked` waits on something else (see its comments); it isn't ready to
+pick up. Issues labelled `good first issue` are a good place to start.
+
 ### Pull request guidelines
 
 - Keep changes focused; one topic per PR.
@@ -60,7 +74,8 @@ Every change starts with an issue, also for the maintainer:
 Versions follow [Semantic Versioning](https://semver.org). To release:
 
 1. In a pull request (with its issue), bump `version` in `pyproject.toml` and run `uv lock`.
-2. After merging: `git switch main && git pull && git tag vX.Y.Z && git push origin vX.Y.Z`.
+2. After merging: `git switch main && git pull && git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`
+   (an annotated tag; `v*` tags can't be moved or deleted).
 3. The `Release` workflow checks that the tag matches the version, runs the tests, builds the
    wheel and sdist, and publishes a GitHub Release with generated notes.
 

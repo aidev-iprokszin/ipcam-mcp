@@ -1,0 +1,45 @@
+name: Issue status
+
+# Keeps the "in progress" label in step with assignment (see "Picking up an issue" in
+# CONTRIBUTING.md). Issue events only: runs in this repository's context and never with code
+# from a pull request, so the write token is safe.
+on:
+  issues:
+    types: [assigned, unassigned, closed]
+
+permissions:
+  issues: write
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Update the issue's labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          ACTION: ${{ github.event.action }}
+          STATE: ${{ github.event.issue.state }}
+          ASSIGNEES: ${{ toJSON(github.event.issue.assignees) }}
+        run: |
+          remove() {  # a label the issue doesn't have is fine
+            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/$1" --silent 2>/dev/null || true
+          }
+          case "$ACTION" in
+            assigned)
+              if [ "$STATE" = open ]; then
+                gh api "repos/$REPO/issues/$ISSUE/labels" -f 'labels[]=in progress' --silent
+              fi
+              ;;
+            unassigned)
+              if [ "$(printf '%s' "$ASSIGNEES" | jq length)" -eq 0 ]; then
+                remove "in%20progress"
+              fi
+              ;;
+            closed)
+              remove "in%20progress"
+              remove "blocked"
+              ;;
+          esac
