@@ -859,3 +859,19 @@ async def test_delete_identical_targets_get_distinct_labels(env):
     targets = confirm.calls[0][1]
     assert len(set(targets)) == 2
     assert targets[0].endswith("[yyyyyyyy]") and targets[1].endswith("[zzzzzzzz]")
+
+
+async def test_delete_refuses_symlinked_folder_before_changing_anything(env, tmp_path):
+    cfg, _, _ = env
+    elsewhere = tmp_path / "disk2"
+    elsewhere.mkdir()
+    media = cfg.parent / "media"
+    media.mkdir(exist_ok=True)
+    (media / uid_for("office")).symlink_to(elsewhere)
+    before = cfg.read_bytes()
+    confirm = choosing(0)
+    mgr, registry, _ = make_manager(cfg)
+    with pytest.raises(ValueError, match="symlink"):
+        await mgr.delete("office", confirm)
+    assert confirm.calls == []  # refused before asking
+    assert cfg.read_bytes() == before and ids(registry) == ["office"]

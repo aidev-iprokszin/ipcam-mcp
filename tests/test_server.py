@@ -900,3 +900,16 @@ async def test_list_cameras_include_removed(managed, tmp_path):
         "recordings": 0,
         "baselines": 0,
     }
+
+
+async def test_call_queued_behind_camera_removal_fails_cleanly(registry, tmp_path):
+    """A camera call waiting for the camera lock while the camera is removed (delete_camera,
+    remove_camera, rename_camera) must not run with the retired adapter afterwards."""
+    async with Client(build_server(registry)) as client:
+        async with registry.lock("cam"):
+            call = asyncio.create_task(client.call_tool("camera_snapshot", {"camera": "cam"}))
+            await asyncio.sleep(0.05)  # the call is now waiting for the lock
+            registry.reload(AppConfig(media_dir=tmp_path, devices={}))
+        r = await call
+    assert r.is_error and "camera 'cam' not found" in text_of(r)
+    assert not (tmp_path / uid_for("cam")).exists()

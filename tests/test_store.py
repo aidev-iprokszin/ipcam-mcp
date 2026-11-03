@@ -10,6 +10,7 @@ from ipcam_mcp.store import (
     UID_PATTERN,
     CameraMeta,
     camera_dir,
+    check_deletable,
     delete_folder,
     ensure_folder,
     folder_names,
@@ -163,8 +164,40 @@ def test_delete_folder_reports_leftovers(tmp_path, monkeypatch):
     stuck = folder / "office_20261103-111200.jpg"
     stuck.write_bytes(b"x")
 
-    def fake_rmtree(path, onexc):
-        onexc(os.unlink, str(stuck), PermissionError(13, "Permission denied"))
+    def deny(path, *a, **kw):
+        raise PermissionError(13, "Permission denied", str(path))
 
-    monkeypatch.setattr(store.shutil, "rmtree", fake_rmtree)
+    monkeypatch.setattr(store.os, "unlink", deny)
     assert delete_folder(tmp_path, "aaaaaaaa") == [stuck]
+
+
+def test_delete_folder_keeps_camera_json_when_files_remain(tmp_path, monkeypatch):
+    """So a removed camera with leftovers stays listed and delete_camera can finish later."""
+    folder = _camera(tmp_path, "aaaaaaaa", "office")
+    stuck = folder / "office_20261103-111200.jpg"
+    stuck.write_bytes(b"x")
+    (folder / "office_20261103-111300.jpg").write_bytes(b"x")
+    real_unlink = os.unlink
+
+    def deny(path, *a, **kw):
+        if str(path).endswith("111200.jpg"):
+            raise PermissionError(13, "Permission denied", str(path))
+        real_unlink(path, *a, **kw)
+
+    monkeypatch.setattr(store.os, "unlink", deny)
+    left = delete_folder(tmp_path, "aaaaaaaa")
+    assert stuck in left
+    assert read_meta(folder).name == "office"
+    assert [c.uid for c in removed_cameras(tmp_path, set())] == ["aaaaaaaa"]
+
+
+def test_check_deletable(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    media = tmp_path / "media"
+    (media / "aaaaaaaa").mkdir(parents=True)
+    (media / "bbbbbbbb").symlink_to(outside)
+    check_deletable(media, "aaaaaaaa")
+    check_deletable(media, "cccccccc")  # missing: nothing to refuse
+    with pytest.raises(ValueError, match="symlink"):
+        check_deletable(media, "bbbbbbbb")

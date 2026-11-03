@@ -150,23 +150,48 @@ def removed_cameras(media_dir: Path, configured_uids: Collection[str]) -> list[S
     return sorted(found, key=lambda c: c.created)
 
 
+def check_deletable(media_dir: Path, uid: str) -> Path:
+    """The camera's folder, if it may be deleted: a real directory directly inside
+    ``media_dir`` (``media_dir`` itself may be a symlink, e.g. to another disk)."""
+    folder = camera_dir(media_dir, uid)
+    if folder.is_symlink():
+        raise ValueError(f"refusing to delete {folder}: it is a symlink; delete it by hand")
+    if folder.exists() and (not folder.is_dir() or folder.resolve().parent != media_dir.resolve()):
+        raise ValueError(f"refusing to delete {folder}: not a camera folder in {media_dir}")
+    return folder
+
+
 def delete_folder(media_dir: Path, uid: str) -> list[Path]:
     """Delete ``<media_dir>/<uid>``; returns the paths that could not be deleted.
 
-    Only a real directory directly inside ``media_dir`` is deleted (``media_dir`` itself may
-    be a symlink, e.g. to another disk).
+    ``camera.json`` goes last, so a folder with leftovers is still listed as a removed camera
+    and can be deleted again later.
     """
-    folder = camera_dir(media_dir, uid)
-    if folder.is_symlink():
-        raise ValueError(f"refusing to delete {folder}: it is a symlink")
+    folder = check_deletable(media_dir, uid)
     if not folder.exists():
         return []
-    if not folder.is_dir() or folder.resolve().parent != media_dir.resolve():
-        raise ValueError(f"refusing to delete {folder}: not a camera folder in {media_dir}")
     left: list[Path] = []
 
     def collect(_func, path, _exc) -> None:
         left.append(Path(path))
 
-    shutil.rmtree(folder, onexc=collect)
+    for entry in sorted(folder.iterdir()):
+        if entry.name == META:
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, onexc=collect)
+        else:
+            try:
+                os.unlink(entry)
+            except OSError:
+                left.append(entry)
+    if left:
+        return left
+    for path, remove in ((folder / META, os.unlink), (folder, os.rmdir)):
+        try:
+            remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            left.append(path)
     return left

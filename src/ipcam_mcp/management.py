@@ -269,10 +269,12 @@ class Manager:
             for target in chosen:
                 files += target.files
                 if target.configured:
-                    note = await self._drop_configured(name, config)
+                    note, gone = await self._drop_configured(name, config, target.uid)
+                    left += gone
                     if note:
                         notes.append(note)
-                left += store.delete_folder(config.media_dir, target.uid)
+                else:
+                    left += store.delete_folder(config.media_dir, target.uid)
             result = f"deleted '{name}' ({files} file{'s' * (files != 1)})"
             if left:
                 shown = ", ".join(str(p) for p in left[:5]) + (" …" if len(left) > 5 else "")
@@ -283,7 +285,7 @@ class Manager:
         targets = []
         dev = config.devices.get(name)
         if dev is not None:
-            folder = config.media_dir / dev.uid
+            folder = store.check_deletable(config.media_dir, dev.uid)
             meta = store.CameraMeta(dev.uid, name, datetime.now().astimezone())
             used = store.usage(folder, meta)
             owned = self._owned_secrets(name, config.secrets_dir)
@@ -300,6 +302,7 @@ class Manager:
         configured = {d.uid for d in config.devices.values()}
         for used in store.removed_cameras(config.media_dir, configured):
             if used.name == name:
+                store.check_deletable(config.media_dir, used.uid)
                 added = used.created.date().isoformat()
                 targets.append(
                     _DeleteTarget(
@@ -330,9 +333,12 @@ class Manager:
             "To delete it by hand: " + "; then ".join(steps)
         )
 
-    async def _drop_configured(self, name: str, config: AppConfig) -> str | None:
-        """Remove ``name`` from the config (and its managed secrets file) while holding its
-        camera lock, so a running capture finishes first. Returns a note on failure."""
+    async def _drop_configured(
+        self, name: str, config: AppConfig, uid: str
+    ) -> tuple[str | None, list[Path]]:
+        """Remove ``name`` from the config, its managed secrets file and its folder while
+        holding its camera lock, so a running capture finishes first and a queued one finds
+        nothing to write into. Returns (note on a secrets failure, paths left over)."""
         owned = self._owned_secrets(name, config.secrets_dir)
         async with self._registry.lock(name):
             await self._mutate(
@@ -345,8 +351,9 @@ class Manager:
                     owned.unlink(missing_ok=True)
                 except OSError as exc:
                     note = f"could not delete {owned}: {exc.strerror or exc}"
+            left = store.delete_folder(config.media_dir, uid)
         await self._registry.close_retired()
-        return note
+        return note, left
 
     async def reload(self) -> list[dict]:
         async with self._lock:

@@ -159,8 +159,11 @@ def build_server(
 
     async def with_camera(camera: str, capability: str, op: Callable[[Any], Awaitable[Any]]):
         async def run():
-            adapter = registry.get(camera, capability)
+            registry.get(camera, capability)  # fail fast for unknown cameras
             async with registry.lock(camera):
+                # Again under the lock: the camera may have been removed or replaced
+                # while this call waited (delete/remove/rename_camera, reload).
+                adapter = registry.get(camera, capability)
                 return await op(adapter)
 
         return await _guarded(run)
@@ -222,8 +225,11 @@ def build_server(
 
         async def run():
             box = crop_box(crop, region)
-            adapter = registry.get(camera, "camera")
+            registry.get(camera, "camera")  # fail fast for unknown cameras
             async with registry.lock(camera):
+                # Again under the lock: the camera may have been removed or replaced
+                # while this call waited (delete/remove/rename_camera, reload).
+                adapter = registry.get(camera, "camera")
                 if from_path is not None:
                     path = resolve_source(from_path)
                     label = "Source"
@@ -248,8 +254,11 @@ def build_server(
         'door-closed')."""
 
         async def run():
-            adapter = registry.get(camera, "camera")
+            registry.get(camera, "camera")  # fail fast for unknown cameras
             async with registry.lock(camera):
+                # Again under the lock: the camera may have been removed or replaced
+                # while this call waited (delete/remove/rename_camera, reload).
+                adapter = registry.get(camera, "camera")
                 baselines.check_name(name)
                 path = await adapter.snapshot(quality)
                 pos = await _position(adapter) if isinstance(adapter, PTZ) else None
@@ -271,8 +280,11 @@ def build_server(
         camera_snapshot to look closer."""
 
         async def run():
-            adapter = registry.get(camera, "camera")
+            registry.get(camera, "camera")  # fail fast for unknown cameras
             async with registry.lock(camera):
+                # Again under the lock: the camera may have been removed or replaced
+                # while this call waited (delete/remove/rename_camera, reload).
+                adapter = registry.get(camera, "camera")
                 base = None
                 if baseline is not None:
                     base = baselines.load_baseline(registry.folder(camera), baseline)
