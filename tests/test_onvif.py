@@ -869,3 +869,60 @@ async def test_aclose_close_error_after_cancel_is_retrieved(cam, ptz, caplog):
         await asyncio.sleep(0)
     gc.collect()
     assert "exception was never retrieved" not in caplog.text
+
+
+async def test_aclose_tolerates_a_sync_close(cam, ptz):
+    await cam.list_presets()
+    client = cam._cam
+
+    def close():  # not async
+        raise RuntimeError("sync close")
+
+    client.close = close
+    await cam.aclose()  # must not raise
+    assert cam._cam is None
+
+
+async def test_aclose_leaves_no_pending_close(cam, ptz):
+    await cam.list_presets()
+    client = cam._cam
+    release = asyncio.Event()
+
+    async def close():
+        await release.wait()
+
+    client.close = close
+    task = asyncio.create_task(cam.aclose())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert onvif._closing
+    release.set()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert not onvif._closing
+
+
+async def test_probe_finishes_closing_when_cancelled():
+    release = asyncio.Event()
+    closed = []
+
+    class SlowClose(FakeProbeCamera):
+        async def close(self):
+            await release.wait()
+            closed.append(1)
+
+    task = asyncio.create_task(
+        onvif.probe("10.0.0.5", "admin", "secret", onvif_factory=lambda *a: SlowClose())
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert closed == [1]
