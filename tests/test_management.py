@@ -11,7 +11,6 @@ from dotenv import dotenv_values
 
 from ipcam_mcp import store
 from ipcam_mcp.adapters.onvif import DeviceInfo
-from ipcam_mcp.baselines import latest_snapshot
 from ipcam_mcp.config import load_config
 from ipcam_mcp.errors import ConfigError, DeviceError
 from ipcam_mcp.management import (
@@ -22,6 +21,7 @@ from ipcam_mcp.management import (
     validate_id,
 )
 from ipcam_mcp.registry import Registry
+from ipcam_mcp.scenes import latest_in_scene
 from ipcam_mcp.store import UID_PATTERN, CameraMeta, read_meta, write_meta
 
 USER = "camuser"
@@ -520,13 +520,14 @@ async def test_remove_reload_failure_keeps_secrets(env):
 
 async def test_reload_returns_list(env):
     cfg, _, _ = env
-    mgr, _, _ = make_manager(cfg)
+    mgr, _, _ = make_manager(cfg, load=prepare_config)
     text = cfg.read_text().replace("[cameras.office]", "[cameras.desk]")
     cfg.write_text(text)
     assert await mgr.reload() == [
         {
             "id": "desk",
             "uid": uid_for("office"),
+            "scene": "desk",  # no media folder yet: no history to keep
             "type": "tapo_onvif",
             "capabilities": ["camera", "ptz"],
         }
@@ -645,7 +646,10 @@ async def test_rename_moves_no_files_and_updates_meta(env):
     assert result == "renamed 'office' to 'front'"
     assert read_meta(folder).name == "front"  # before registry.folder() could rewrite it
     assert registry.folder("front") == folder
-    assert latest_snapshot(folder) == folder / "office_20261103-111200.jpg"
+    meta = read_meta(folder)
+    assert (
+        latest_in_scene(folder, meta, meta.current_scene) == folder / "office_20261103-111200.jpg"
+    )
     assert sorted(p.name for p in folder.parent.iterdir()) == [uid_for("office")]
 
 
@@ -875,3 +879,137 @@ async def test_delete_refuses_symlinked_folder_before_changing_anything(env, tmp
         await mgr.delete("office", confirm)
     assert confirm.calls == []  # refused before asking
     assert cfg.read_bytes() == before and ids(registry) == ["office"]
+
+
+# --- scenes ---
+
+
+async def test_rename_pins_implicit_scene(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    await mgr.rename("office", "front")
+    assert tomllib.loads(cfg.read_text())["cameras"]["front"]["scene"] == "office"
+    assert registry.config("front").scene == "office"
+    assert read_meta(registry.folder("front")).current_scene == "office"
+
+
+async def test_rename_keeps_explicit_scene(env):
+    cfg, _, _ = env
+    cfg.write_text(
+        cfg.read_text().replace("[cameras.office]\n", '[cameras.office]\nscene = "desk"\n')
+    )
+    mgr, _, _ = make_manager(cfg)
+    await mgr.rename("office", "front")
+    assert tomllib.loads(cfg.read_text())["cameras"]["front"]["scene"] == "desk"
+
+
+async def test_set_scene_appends_period(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    result = await mgr.set_scene("office", "front-door")
+    assert result == "moved 'office' to scene 'front-door'"
+    assert tomllib.loads(cfg.read_text())["cameras"]["office"]["scene"] == "front-door"
+    assert [p.scene for p in read_meta(folder).scenes] == ["office", "front-door"]
+    assert registry.config("office").scene == "front-door"
+
+
+async def test_set_scene_same_scene_noop(env):
+    cfg, _, _ = env
+    before = cfg.read_bytes()
+    mgr, _, _ = make_manager(cfg)
+    assert await mgr.set_scene("office", "office") == "'office' is already in scene 'office'"
+    assert cfg.read_bytes() == before
+
+
+async def test_set_scene_errors(env):
+    cfg, _, _ = env
+    mgr, _, _ = make_manager(cfg)
+    with pytest.raises(ValueError, match="camera 'nope' not found"):
+        await mgr.set_scene("nope", "x")
+    with pytest.raises(ValueError, match="invalid scene"):
+        await mgr.set_scene("office", "Front Door")
+
+
+async def test_set_scene_waits_for_running_capture(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    order: list[str] = []
+
+    async def capture():
+        async with registry.lock("office"):
+            await asyncio.sleep(0.05)
+            order.append("capture done")
+
+    task = asyncio.create_task(capture())
+    await asyncio.sleep(0)
+    await mgr.set_scene("office", "front-door")
+    order.append("moved")
+    await task
+    assert order == ["capture done", "moved"]
+    assert read_meta(folder).current_scene == "front-door"
+
+
+async def test_hand_edited_scene_appends_period_on_reload(env, caplog):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg, load=prepare_config)
+    folder = registry.folder("office")
+    cfg.write_text(
+        cfg.read_text().replace("[cameras.office]\n", '[cameras.office]\nscene = "desk"\n')
+    )
+    with caplog.at_level("INFO", logger="ipcam_mcp"):
+        await mgr.reload()
+    assert read_meta(folder).current_scene == "desk"
+    assert "set_scene" in caplog.text
+
+
+async def test_add_with_scene(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    await mgr.add(
+        "garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)), scene="front-door"
+    )
+    assert tomllib.loads(cfg.read_text())["cameras"]["garage"]["scene"] == "front-door"
+    assert read_meta(registry.folder("garage")).scenes[0].scene == "front-door"
+    await mgr.add("carport", "10.0.0.6", prompt_with(Credentials(USER, PASSWORD)), scene="carport")
+    assert "scene" not in tomllib.loads(cfg.read_text())["cameras"]["carport"]
+
+
+async def test_hand_rename_keeps_scene(env):
+    """Renaming the section by hand is a rename, not a move: the scene is pinned."""
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg, load=prepare_config)
+    folder = registry.folder("office")
+    cfg.write_text(cfg.read_text().replace("[cameras.office]", "[cameras.desk]"))
+    listed = await mgr.reload()
+    assert listed[0]["scene"] == "office"
+    assert tomllib.loads(cfg.read_text())["cameras"]["desk"]["scene"] == "office"
+    assert [p.scene for p in read_meta(folder).scenes] == ["office"]
+
+
+async def test_set_scene_returns_once_the_new_period_has_started(env):
+    """A capture right after set_scene must be stamped in the new scene."""
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    await mgr.set_scene("office", "desk")
+    assert datetime.now().astimezone() >= read_meta(folder).scenes[-1].since
+
+
+def test_scene_sync_io_error_is_logged_not_fatal(env, monkeypatch, caplog):
+    cfg, _, _ = env
+    _, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    cfg.write_text(
+        cfg.read_text().replace("[cameras.office]\n", '[cameras.office]\nscene = "desk"\n')
+    )
+
+    def fail(*a, **kw):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(store, "enter_scene", fail)
+    with caplog.at_level("WARNING", logger="ipcam_mcp"):
+        config = prepare_config(cfg)
+    assert config.devices["office"].scene == "desk"
+    assert "could not record" in caplog.text

@@ -52,7 +52,13 @@ async def test_list_cameras(registry):
     assert not r.is_error
     data = json.loads(text_of(r))
     assert data == [
-        {"id": "cam", "uid": uid_for("cam"), "type": "fake", "capabilities": ["camera", "ptz"]}
+        {
+            "id": "cam",
+            "uid": uid_for("cam"),
+            "scene": "cam",
+            "type": "fake",
+            "capabilities": ["camera", "ptz"],
+        }
     ]
 
 
@@ -477,7 +483,7 @@ async def test_management_tools_present_when_allowed(managed):
     async with Client(server) as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
     props = tools["add_camera"].input_schema["properties"]
-    assert set(props) == {"name", "host", "credentials_via", "onvif_port"}
+    assert set(props) == {"name", "host", "credentials_via", "onvif_port", "scene"}
 
 
 async def test_add_camera_via_form(managed):
@@ -894,6 +900,7 @@ async def test_list_cameras_include_removed(managed, tmp_path):
     assert full[1] == {
         "id": "garage",
         "uid": "zzzzzzzz",
+        "scene": "garage",
         "removed": True,
         "created": "2025-01-01",
         "snapshots": 1,
@@ -913,3 +920,76 @@ async def test_call_queued_behind_camera_removal_fails_cleanly(registry, tmp_pat
         r = await call
     assert r.is_error and "camera 'cam' not found" in text_of(r)
     assert not (tmp_path / uid_for("cam")).exists()
+
+
+async def test_set_scene_tool(managed):
+    _, reg, manager = managed
+    async with Client(build_server(reg, manager, allow_management=True)) as client:
+        r = await client.call_tool("set_scene", {"camera": "office", "scene": "desk"})
+        listed = json.loads(text_of(await client.call_tool("list_cameras", {})))
+    assert text_of(r) == "moved 'office' to scene 'desk'"
+    assert listed[0]["scene"] == "desk"
+
+
+async def test_set_scene_hidden_without_management(managed):
+    _, reg, manager = managed
+    assert "set_scene" not in await tool_names(build_server(reg, manager, allow_management=False))
+
+
+async def test_add_camera_schema_has_scene(managed):
+    _, reg, manager = managed
+    async with Client(build_server(reg, manager, allow_management=True)) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    assert "scene" in tools["add_camera"].input_schema["properties"]
+
+
+async def test_list_cameras_include_removed_has_scene(managed, tmp_path):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    async with Client(build_server(reg, manager, allow_management=True)) as client:
+        full = json.loads(
+            text_of(await client.call_tool("list_cameras", {"include_removed": True}))
+        )
+    assert full[1]["scene"] == "garage"
+
+
+# --- compare stays within the scene ---
+
+
+def old_snapshot(reg, camera="office", stamp="20200101-000000"):
+    folder = reg.folder(camera)
+    Image.new("RGB", (64, 48), (10, 10, 10)).save(folder / f"{camera}_{stamp}.jpg", "JPEG")
+
+
+async def test_compare_ignores_snapshots_from_previous_scene(managed, monkeypatch):
+    _, reg, manager = managed
+    old_snapshot(reg)
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager, allow_management=True)) as client:
+        await client.call_tool("set_scene", {"camera": "office", "scene": "desk"})
+        r = await client.call_tool("camera_compare", {"camera": "office"})
+    assert r.is_error
+    assert "no previous snapshot of 'office'" in text_of(r)
+
+
+async def test_compare_baseline_from_other_scene_not_found(managed, monkeypatch):
+    _, reg, manager = managed
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager, allow_management=True)) as client:
+        await client.call_tool("camera_save_baseline", {"camera": "office", "name": "door"})
+        await client.call_tool("set_scene", {"camera": "office", "scene": "desk"})
+        await client.call_tool("camera_save_baseline", {"camera": "office", "name": "lamp"})
+        r = await client.call_tool("camera_compare", {"camera": "office", "baseline": "door"})
+    assert r.is_error
+    assert "baseline 'door' not found; available: lamp" in text_of(r)
+
+
+async def test_compare_keeps_working_after_rename(managed, monkeypatch):
+    _, reg, manager = managed
+    old_snapshot(reg)
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager, allow_management=True)) as client:
+        await client.call_tool("rename_camera", {"old": "office", "new": "front"})
+        r = await client.call_tool("camera_compare", {"camera": "front"})
+    assert not r.is_error, text_of(r)
+    assert text_of(r).startswith("Compared with previous snapshot office_20200101-000000.jpg (")

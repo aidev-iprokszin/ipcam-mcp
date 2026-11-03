@@ -11,6 +11,7 @@ from ipcam_mcp.adapters.onvif import OnvifPtzCamera
 from ipcam_mcp.config import AppConfig, DeviceConfig
 from ipcam_mcp.errors import ConfigError, DeviceError
 from ipcam_mcp.registry import Registry
+from ipcam_mcp.store import read_meta
 
 
 class FakeCamera:
@@ -50,7 +51,13 @@ def test_list():
     reg = Registry(app(dev("cam")), adapters={"fake": FakeCamera})
     listed = reg.list()
     assert listed == [
-        {"id": "cam", "uid": uid_for("cam"), "type": "fake", "capabilities": ["camera"]}
+        {
+            "id": "cam",
+            "uid": uid_for("cam"),
+            "scene": "cam",
+            "type": "fake",
+            "capabilities": ["camera"],
+        }
     ]
     assert "10.0.0.9" not in repr(listed)
     assert "pw" not in repr(listed)
@@ -203,3 +210,13 @@ def test_folder_unknown_camera(tmp_path):
     reg = Registry(AppConfig(tmp_path, {}))
     with pytest.raises(DeviceError, match="camera 'nope' not found"):
         reg.folder("nope")
+
+
+def test_list_has_scene_and_config(tmp_path):
+    d = dataclasses.replace(dev("cam"), scene="front-door")
+    reg = Registry(AppConfig(tmp_path, {"cam": d}), adapters={"fake": FakeCamPTZ})
+    assert reg.list()[0]["scene"] == "front-door"
+    assert reg.config("cam").scene == "front-door"
+    assert read_meta(reg.folder("cam")).current_scene == "front-door"
+    with pytest.raises(DeviceError, match="camera 'nope' not found"):
+        reg.config("nope")

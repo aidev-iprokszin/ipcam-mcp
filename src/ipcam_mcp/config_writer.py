@@ -95,6 +95,15 @@ def rename_section(path: Path, old: str, new: str, updates: dict[str, str] | Non
     atomic_write(path, tomlkit.dumps(doc))
 
 
+def set_key(path: Path, cam_id: str, key: str, value: str) -> None:
+    doc = _load(path)
+    cameras = doc.get("cameras")
+    if cameras is None or cam_id not in cameras:
+        raise ConfigError(f"camera {cam_id!r} not found in {path}")
+    cameras[cam_id][key] = value
+    atomic_write(path, tomlkit.dumps(doc))
+
+
 def remove_section(path: Path, cam_id: str) -> None:
     doc = _load(path)
     cameras = doc.get("cameras")

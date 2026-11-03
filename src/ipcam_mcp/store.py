@@ -16,8 +16,8 @@ import shutil
 import string
 import tempfile
 from collections.abc import Collection
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 from pathlib import Path
 
 UID_PATTERN = r"^[a-z0-9]{8}$"
@@ -28,10 +28,28 @@ log = logging.getLogger("ipcam_mcp")
 
 
 @dataclass(frozen=True)
+class Period:
+    """From ``since`` on, the camera watched ``scene``; ``continues``: declared predecessor."""
+
+    scene: str
+    since: datetime
+    continues: str | None = None
+
+
+@dataclass(frozen=True)
 class CameraMeta:
     uid: str
     name: str
     created: datetime
+    scenes: tuple[Period, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.scenes:  # before scenes existed: the name was the scene, since creation
+            object.__setattr__(self, "scenes", (Period(self.name, self.created),))
+
+    @property
+    def current_scene(self) -> str:
+        return self.scenes[-1].scene
 
 
 @dataclass(frozen=True)
@@ -46,6 +64,7 @@ class StoredCamera:
     recordings: int
     baselines: int
     size: int
+    scene: str = ""  # the scene it was last in
 
 
 _CAPTURE_RE = re.compile(r"^.+_\d{8}-\d{6}(?:-\d+)?\.(jpg|mp4)$")
@@ -79,20 +98,42 @@ def read_meta(folder: Path) -> CameraMeta | None:
     path = folder / META
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        meta = CameraMeta(raw["uid"], raw["name"], datetime.fromisoformat(raw["created"]))
+        periods = tuple(_period(p) for p in raw.get("scenes") or ())
+        meta = CameraMeta(raw["uid"], raw["name"], datetime.fromisoformat(raw["created"]), periods)
         if not (_UID_RE.fullmatch(meta.uid) and isinstance(meta.name, str)):
             raise ValueError("bad uid or name")
         return meta
     except FileNotFoundError:
         return None
-    except (OSError, ValueError, KeyError, TypeError) as e:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         log.warning("%s: unreadable (%s)", path, type(e).__name__)
         return None
 
 
+def _period(raw: object) -> Period:
+    if not isinstance(raw, dict) or not isinstance(raw.get("scene"), str):
+        raise TypeError("bad scene period")
+    continues = raw.get("continues")
+    if continues is not None and not (isinstance(continues, str) and _UID_RE.fullmatch(continues)):
+        raise ValueError("bad continues")
+    return Period(raw["scene"], datetime.fromisoformat(raw["since"]), continues)
+
+
+def _period_json(p: Period) -> dict:
+    data = {"scene": p.scene, "since": p.since.isoformat()}
+    if p.continues:
+        data["continues"] = p.continues
+    return data
+
+
 def write_meta(folder: Path, meta: CameraMeta) -> None:
     folder.mkdir(parents=True, exist_ok=True)
-    data = {"uid": meta.uid, "name": meta.name, "created": meta.created.isoformat()}
+    data = {
+        "uid": meta.uid,
+        "name": meta.name,
+        "created": meta.created.isoformat(),
+        "scenes": [_period_json(p) for p in meta.scenes],
+    }
     # Own small atomic write: config_writer imports this module (see #17 for a shared helper).
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=f".{META}.", suffix=".tmp")
     try:
@@ -107,16 +148,46 @@ def write_meta(folder: Path, meta: CameraMeta) -> None:
         raise
 
 
-def ensure_folder(media_dir: Path, uid: str, name: str) -> Path:
-    """The camera's folder, created if needed, with ``camera.json`` naming it ``name``."""
+def _now() -> datetime:
+    return datetime.now().astimezone().replace(microsecond=0)
+
+
+def ensure_folder(media_dir: Path, uid: str, name: str, scene: str | None = None) -> Path:
+    """The camera's folder, created if needed, with ``camera.json`` naming it ``name``.
+
+    A new folder starts in ``scene`` (default: ``name``). For an existing one only the name
+    is updated; scene changes go through ``enter_scene``.
+    """
     folder = camera_dir(media_dir, uid)
     meta = read_meta(folder)
     if meta is None:
-        created = datetime.now().astimezone().replace(microsecond=0)
-        write_meta(folder, CameraMeta(uid, name, created))
+        created = _now()
+        write_meta(folder, CameraMeta(uid, name, created, (Period(scene or name, created),)))
     elif meta.name != name:
-        write_meta(folder, CameraMeta(uid, name, meta.created))
+        write_meta(folder, replace(meta, name=name))
     return folder
+
+
+def enter_scene(
+    media_dir: Path, uid: str, name: str, scene: str, continues: str | None = None
+) -> CameraMeta:
+    """Record that the camera watches ``scene`` from now on (optionally as the successor of
+    ``continues``). Re-entering the current scene only sets ``continues`` on its period."""
+    folder = ensure_folder(media_dir, uid, name, scene)
+    meta = read_meta(folder)
+    assert meta is not None  # ensure_folder just wrote it
+    last = meta.scenes[-1]
+    if last.scene == scene:
+        if continues is None or last.continues == continues:
+            return meta
+        periods = (*meta.scenes[:-1], replace(last, continues=continues))
+    else:
+        # Capture names have whole seconds: the new period starts at the next one, so a
+        # capture taken in the second of the move stays with the old scene.
+        periods = (*meta.scenes, Period(scene, _now() + timedelta(seconds=1), continues))
+    meta = replace(meta, scenes=periods)
+    write_meta(folder, meta)
+    return meta
 
 
 def usage(folder: Path, meta: CameraMeta) -> StoredCamera:
@@ -133,7 +204,15 @@ def usage(folder: Path, meta: CameraMeta) -> StoredCamera:
             p.stat().st_size for p in folder.rglob("*") if p.is_file() and not p.is_symlink()
         )
     return StoredCamera(
-        meta.uid, meta.name, meta.created, folder, snapshots, recordings, baselines, size
+        meta.uid,
+        meta.name,
+        meta.created,
+        folder,
+        snapshots,
+        recordings,
+        baselines,
+        size,
+        meta.current_scene,
     )
 
 

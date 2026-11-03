@@ -23,13 +23,13 @@ from dotenv import dotenv_values
 from ipcam_mcp import config_writer, store
 from ipcam_mcp.adapters import onvif
 from ipcam_mcp.adapters.onvif import DeviceInfo
-from ipcam_mcp.config import AppConfig, load_config, media_dir_of
+from ipcam_mcp.config import NAME_PATTERN, AppConfig, load_config, media_dir_of
 from ipcam_mcp.errors import ConfigError
 from ipcam_mcp.registry import Registry
 
 log = logging.getLogger(__name__)
 
-ID_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,31}$"
+ID_PATTERN = NAME_PATTERN
 _ID_RE = re.compile(ID_PATTERN)
 _LABEL_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
@@ -49,6 +49,11 @@ Prober = Callable[[str, str, str, int | None], Awaitable[DeviceInfo]]
 def validate_id(cam_id: str) -> None:
     if not _ID_RE.fullmatch(cam_id):
         raise ValueError(f"invalid camera id {cam_id!r}: must match {ID_PATTERN}")
+
+
+def validate_scene(scene: str) -> None:
+    if not _ID_RE.fullmatch(scene):
+        raise ValueError(f"invalid scene {scene!r}: must match {ID_PATTERN}")
 
 
 def validate_host(host: str) -> None:
@@ -84,7 +89,48 @@ def prepare_config(path: Path) -> AppConfig:
                     "'%s'. If it is the same camera, set uid = \"%s\" in its section of %s",
                     name, media_dir / old, name, old, path,
                 )  # fmt: skip
-    return load_config(path, missing_ok=True)
+    config = load_config(path, missing_ok=True)
+    if _sync_scenes(path, config):
+        config = load_config(path, missing_ok=True)
+    return config
+
+
+def _sync_scenes(path: Path, config: AppConfig) -> bool:
+    """Record scene changes made by hand in cameras.toml as a new period.
+
+    A section renamed by hand (no ``scene`` line, so the scene would follow the new name) is a
+    rename like rename_camera's: its scene is pinned to the old one. Returns whether
+    ``path`` was changed.
+    """
+    try:
+        sections = tomllib.loads(path.read_text(encoding="utf-8")).get("cameras", {})
+    except (OSError, tomllib.TOMLDecodeError):
+        sections = {}
+    changed = False
+    for name, dev in config.devices.items():
+        folder = config.media_dir / dev.uid
+        meta = store.read_meta(folder) if folder.is_dir() else None
+        if meta is None or meta.current_scene == dev.scene:
+            continue
+        if meta.name != name and "scene" not in sections.get(name, {}):
+            config_writer.set_key(path, name, "scene", meta.current_scene)
+            log.info("camera '%s' was renamed from '%s'; it keeps scene '%s'",
+                     name, meta.name, meta.current_scene)  # fmt: skip
+            changed = True
+            continue
+        try:
+            store.enter_scene(config.media_dir, dev.uid, name, dev.scene)
+        except OSError as e:
+            log.warning("camera '%s': could not record scene '%s' in %s: %s",
+                        name, dev.scene, folder, e.strerror or e)  # fmt: skip
+            continue
+        log.info(
+            "camera '%s' is now in scene '%s'; set_scene can declare it the successor of "
+            "a removed camera",
+            name,
+            dev.scene,
+        )
+    return changed
 
 
 class Manager:
@@ -107,9 +153,12 @@ class Manager:
         host: str,
         prompt: CredentialPrompt | None,
         onvif_port: int | None = None,
+        scene: str | None = None,
     ) -> str:
         validate_id(cam_id)
         validate_host(host)
+        if scene is not None:
+            validate_scene(scene)
         async with self._lock:
             config = self._load(self._config_path)
             if cam_id in config.devices:
@@ -155,6 +204,7 @@ class Manager:
             taken = store.folder_names(config.media_dir) | {d.uid for d in config.devices.values()}
             section: dict[str, Any] = {
                 "uid": store.new_uid(taken),
+                **({"scene": scene} if scene and scene != cam_id else {}),
                 "type": "onvif",
                 "secrets_file": str(env_path),
                 "host_var": "HOST",
@@ -167,7 +217,7 @@ class Manager:
             await self._mutate(
                 lambda: config_writer.add_section(self._config_path, cam_id, section), undo
             )
-            store.ensure_folder(config.media_dir, section["uid"], cam_id)
+            store.ensure_folder(config.media_dir, section["uid"], cam_id, scene or cam_id)
             caps = next(c["capabilities"] for c in self._registry.list() if c["id"] == cam_id)
             return (
                 f"added '{cam_id}' ({info.manufacturer} {info.model}); "
@@ -190,7 +240,9 @@ class Manager:
                 raise ConfigError(f"secrets file already exists: {new_path}")
 
             undo: list[Callable[[], None]] = []
-            updates: dict[str, str] | None = None
+            updates: dict[str, str] = {}
+            if "scene" not in self._sections()[old]:
+                updates["scene"] = old  # a rename changes the handle, not the place
             if managed:
                 try:
                     os.rename(old_path, new_path)
@@ -199,7 +251,7 @@ class Manager:
                         f"could not rename {old_path} to {new_path}: {exc.strerror or exc}"
                     ) from exc
                 undo.append(lambda: os.rename(new_path, old_path))
-                updates = {"secrets_file": str(new_path)}
+                updates["secrets_file"] = str(new_path)
 
             await self._mutate(
                 lambda: config_writer.rename_section(self._config_path, old, new, updates), undo
@@ -214,6 +266,31 @@ class Manager:
                     "keeps its files separately"
                 )
             return f"renamed '{old}' to '{new}'"
+
+    async def set_scene(self, camera: str, scene: str) -> str:
+        """Move ``camera`` to ``scene`` (recorded as a new period in its camera.json)."""
+        validate_scene(scene)
+        async with self._lock:
+            config = self._load(self._config_path)
+            if camera not in config.devices:
+                raise ValueError(f"camera '{camera}' not found")
+            if config.devices[camera].scene == scene:
+                return f"'{camera}' is already in scene '{scene}'"
+            # Under the camera lock, so a running capture belongs to one scene, not two.
+            async with self._registry.lock(camera):
+                await self._mutate(
+                    lambda: config_writer.set_key(self._config_path, camera, "scene", scene),
+                    close_retired=False,  # needs the camera lock held here
+                )
+                dev = self._registry.config(camera)
+                meta = store.enter_scene(config.media_dir, dev.uid, camera, scene)
+                # Capture names have whole seconds and the period starts at the next one:
+                # hold the camera until then, so no later capture is stamped in the old scene.
+                wait = (meta.scenes[-1].since - datetime.now().astimezone()).total_seconds()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+            await self._registry.close_retired()
+            return f"moved '{camera}' to scene '{scene}'"
 
     async def remove(self, cam_id: str) -> str:
         async with self._lock:

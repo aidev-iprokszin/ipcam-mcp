@@ -22,26 +22,7 @@ class Baseline:
     taken: datetime
     quality: str
     position: tuple[float, float] | None
-
-
-_CAPTURE_RE = re.compile(r"^.+_(\d{8}-\d{6})(?:-(\d+))?\.jpg$")
-
-
-def latest_snapshot(folder: Path) -> Path | None:
-    """Newest ``<name>_YYYYmmdd-HHMMSS[-N].jpg`` in the camera's folder. The name prefix is
-    ignored: it is the camera's name at capture time, which renames change."""
-    try:
-        found = [
-            (m, p)
-            for p in folder.iterdir()
-            if (m := _CAPTURE_RE.match(p.name)) and p.stat().st_size > 0  # skip reservations
-        ]
-    except OSError:
-        return None
-    if not found:
-        return None
-    # Same-second captures get -2, -3, ...: sort by (time, counter), not by name.
-    return max(found, key=lambda mp: (mp[0][1], int(mp[0][2] or 1)))[1]
+    scene: str | None = None  # None: saved before scenes existed
 
 
 def check_name(name: str) -> None:
@@ -74,6 +55,7 @@ def save_baseline(
     snapshot: Path,
     quality: str,
     position: tuple[float, float] | None,
+    scene: str | None = None,
 ) -> Baseline:
     check_name(name)
     d = _dir(folder)
@@ -83,11 +65,12 @@ def save_baseline(
         "taken": taken.isoformat(timespec="seconds"),
         "quality": quality,
         "position": list(position) if position is not None else None,
+        "scene": scene,
     }
     jpg = d / f"{name}.jpg"
     _replace_atomic(jpg, lambda tmp: shutil.copyfile(snapshot, tmp))
     _replace_atomic(d / f"{name}.json", lambda tmp: tmp.write_text(json.dumps(meta)))
-    return Baseline(name, jpg, datetime.fromisoformat(meta["taken"]), quality, position)
+    return Baseline(name, jpg, datetime.fromisoformat(meta["taken"]), quality, position, scene)
 
 
 def list_baselines(folder: Path) -> list[str]:
@@ -112,4 +95,5 @@ def load_baseline(folder: Path, name: str) -> Baseline:
         datetime.fromisoformat(meta["taken"]),
         meta.get("quality", "high"),
         (float(pos[0]), float(pos[1])) if pos else None,
+        meta.get("scene"),
     )

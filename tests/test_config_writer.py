@@ -13,6 +13,7 @@ from ipcam_mcp.config_writer import (
     ensure_uids,
     remove_section,
     rename_section,
+    set_key,
     write_secrets_file,
 )
 from ipcam_mcp.errors import ConfigError
@@ -292,3 +293,13 @@ def test_ensure_uids_skips_non_table_section(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text('[cameras]\ngarage = "x"\n')
     assert ensure_uids(p, set()) == {}  # load_config reports it
+
+
+def test_set_key_keeps_comments(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('# top\n[cameras.a]\ntype = "t"  # keep\n')
+    set_key(p, "a", "scene", "front-door")
+    assert _cams(p)["a"] == {"type": "t", "scene": "front-door"}
+    assert "# keep" in p.read_text() and "# top" in p.read_text()
+    with pytest.raises(ConfigError, match="not found"):
+        set_key(p, "nope", "scene", "x")

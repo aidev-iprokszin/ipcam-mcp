@@ -80,7 +80,13 @@ class Registry:
 
     def list(self) -> list[dict]:
         return [
-            {"id": dev_id, "uid": dev.uid, "type": dev.type, "capabilities": _capabilities(adapter)}
+            {
+                "id": dev_id,
+                "uid": dev.uid,
+                "scene": dev.scene or dev_id,
+                "type": dev.type,
+                "capabilities": _capabilities(adapter),
+            }
             for dev_id, (dev, adapter) in self._devices.items()
         ]
 
@@ -93,7 +99,10 @@ class Registry:
     def folder(self, device_id: str) -> Path:
         """The camera's media folder (``<media_dir>/<uid>/``), created if needed."""
         dev, _ = self._require(device_id)
-        return store.ensure_folder(self._media_dir, dev.uid, device_id)
+        return store.ensure_folder(self._media_dir, dev.uid, device_id, dev.scene or device_id)
+
+    def config(self, device_id: str) -> DeviceConfig:
+        return self._require(device_id)[0]
 
     def get(self, device_id: str, capability: str) -> Any:
         self._require(device_id)
