@@ -101,6 +101,10 @@ class Registry:
         dev, _ = self._require(device_id)
         return store.ensure_folder(self._media_dir, dev.uid, device_id, dev.scene or device_id)
 
+    def configs(self) -> dict[str, DeviceConfig]:
+        """Every configured camera's config, by name."""
+        return {dev_id: dev for dev_id, (dev, _) in self._devices.items()}
+
     def config(self, device_id: str) -> DeviceConfig:
         return self._require(device_id)[0]
 

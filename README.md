@@ -11,7 +11,7 @@ Any ONVIF camera should work. See [known cameras](docs/cameras/) for what has be
 | Tool | What it does |
 |---|---|
 | `list_cameras(include_removed=False)` | Configured cameras with their uid, scene and capabilities (`camera`, `ptz`); `include_removed=true` also lists removed cameras whose files are still on disk |
-| `camera_snapshot(camera, quality="high", crop=None, region=None, from_path=None)` | Returns the picture (≤1280 px wide) and saves the full-size JPEG. `crop=[x, y, w, h]` (fractions 0–1) or `region` (`top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`) returns a detail at full resolution. `from_path` crops an earlier snapshot without contacting the camera |
+| `camera_snapshot(camera=None, quality="high", crop=None, region=None, from_path=None)` | Returns the picture (≤1280 px wide) and saves the full-size JPEG. `crop=[x, y, w, h]` (fractions 0–1) or `region` (`top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`) returns a detail at full resolution. `from_path` reuses an earlier snapshot (for example one from `scene_timeline`) without contacting a camera; `camera` is then optional |
 | `camera_save_baseline(camera, name, quality="high")` | Takes a snapshot and keeps it as a named reference (e.g. `door-closed`) |
 | `camera_compare(camera, baseline=None, quality="high")` | Takes a snapshot and reports what changed against the camera's previous snapshot in its current scene, or against a named baseline saved in that scene |
 | `camera_record(camera, seconds=10, quality="high")` | Records 1–60 s to an mp4, returns its path |
@@ -20,6 +20,10 @@ Any ONVIF camera should work. See [known cameras](docs/cameras/) for what has be
 | `ptz_goto_preset(camera, preset)` | Move to a preset by name or token |
 | `ptz_save_preset(camera, name, overwrite=False)` | Saves the current position as a preset; refuses an existing name unless `overwrite=true` |
 | `ptz_remove_preset(camera, preset)` | Deletes a preset by name or token (cannot be undone) |
+| `list_scenes()` | Every scene with its cameras, removed cameras that watched it, the first and last capture and counts |
+| `scene_snapshot(scene, quality="high")` | A snapshot from every camera in the scene, each labelled with the camera's name; a camera that fails reports its error without failing the others |
+| `scene_compare(scene, baseline=None, quality="high")` | `camera_compare` for every camera in the scene, labelled the same way |
+| `scene_timeline(scene, start=None, end=None, limit=50)` | The scene's snapshots, recordings and baselines, newest first, from every camera that watched it (removed ones too). `start`/`end`: `YYYY-MM-DD` (whole day) or an ISO datetime; `limit` 1–500 |
 
 `camera` is a camera's name: its section name in `cameras.toml`. `quality="high"` uses the
 camera's main stream (1080p), `"low"` the sub stream (smaller, quicker). Media is saved to the

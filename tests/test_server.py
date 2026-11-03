@@ -993,3 +993,18 @@ async def test_compare_keeps_working_after_rename(managed, monkeypatch):
         r = await client.call_tool("camera_compare", {"camera": "front"})
     assert not r.is_error, text_of(r)
     assert text_of(r).startswith("Compared with previous snapshot office_20200101-000000.jpg (")
+
+
+async def test_from_path_without_camera(registry, tmp_path):
+    src = tmp_path / "zzzzzzzz" / "gone_20250101-000000.jpg"  # a removed camera's snapshot
+    src.parent.mkdir()
+    Image.new("RGB", (64, 48), (10, 10, 10)).save(src, "JPEG")
+    r = await call(registry, "camera_snapshot", {"from_path": str(src), "region": "center"})
+    assert not r.is_error, text_of(r)
+    assert text_of(r).startswith(f"Source: {src}")
+
+
+async def test_snapshot_without_camera_or_from_path_errors(registry):
+    r = await call(registry, "camera_snapshot", {})
+    assert r.is_error
+    assert "camera is required unless from_path is given" in text_of(r)
