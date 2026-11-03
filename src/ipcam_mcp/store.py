@@ -94,12 +94,18 @@ def camera_dir(media_dir: Path, uid: str) -> Path:
     return media_dir / uid
 
 
+def parse_time(text: str) -> datetime:
+    """An ISO timestamp; one without a UTC offset (e.g. hand-edited) is local time."""
+    when = datetime.fromisoformat(text)
+    return when if when.tzinfo else when.astimezone()
+
+
 def read_meta(folder: Path) -> CameraMeta | None:
     path = folder / META
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         periods = tuple(_period(p) for p in raw.get("scenes") or ())
-        meta = CameraMeta(raw["uid"], raw["name"], datetime.fromisoformat(raw["created"]), periods)
+        meta = CameraMeta(raw["uid"], raw["name"], parse_time(raw["created"]), periods)
         if not (_UID_RE.fullmatch(meta.uid) and isinstance(meta.name, str)):
             raise ValueError("bad uid or name")
         return meta
@@ -116,7 +122,7 @@ def _period(raw: object) -> Period:
     continues = raw.get("continues")
     if continues is not None and not (isinstance(continues, str) and _UID_RE.fullmatch(continues)):
         raise ValueError("bad continues")
-    return Period(raw["scene"], datetime.fromisoformat(raw["since"]), continues)
+    return Period(raw["scene"], parse_time(raw["since"]), continues)
 
 
 def _period_json(p: Period) -> dict:
@@ -152,6 +158,23 @@ def _now() -> datetime:
     return datetime.now().astimezone().replace(microsecond=0)
 
 
+def set_aside_bad_meta(folder: Path) -> Path | None:
+    """Rename ``camera.json``, which ``read_meta`` found unreadable, to
+    ``camera.json.bad-<time>`` so the history it holds is not overwritten before a new one
+    is written; returns the new path, or None if there was no file."""
+    path = folder / META
+    if not (path.exists() or path.is_symlink()):
+        return None
+    stem = f"{META}.bad-{_now():%Y%m%d-%H%M%S}"
+    target, n = folder / stem, 1
+    while target.exists() or target.is_symlink():
+        n += 1
+        target = folder / f"{stem}-{n}"
+    os.replace(path, target)
+    log.warning("%s: unreadable, kept as %s; a new one is written", path, target.name)
+    return target
+
+
 def ensure_folder(media_dir: Path, uid: str, name: str, scene: str | None = None) -> Path:
     """The camera's folder, created if needed, with ``camera.json`` naming it ``name``.
 
@@ -161,6 +184,7 @@ def ensure_folder(media_dir: Path, uid: str, name: str, scene: str | None = None
     folder = camera_dir(media_dir, uid)
     meta = read_meta(folder)
     if meta is None:
+        set_aside_bad_meta(folder)
         created = _now()
         write_meta(folder, CameraMeta(uid, name, created, (Period(scene or name, created),)))
     elif meta.name != name:

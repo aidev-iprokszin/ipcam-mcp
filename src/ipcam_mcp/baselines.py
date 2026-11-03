@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ipcam_mcp.config import NAME_PATTERN
+from ipcam_mcp.store import parse_time
 
 _NAME_RE = re.compile(NAME_PATTERN)
 
@@ -70,7 +71,7 @@ def save_baseline(
     jpg = d / f"{name}.jpg"
     _replace_atomic(jpg, lambda tmp: shutil.copyfile(snapshot, tmp))
     _replace_atomic(d / f"{name}.json", lambda tmp: tmp.write_text(json.dumps(meta)))
-    return Baseline(name, jpg, datetime.fromisoformat(meta["taken"]), quality, position, scene)
+    return Baseline(name, jpg, parse_time(meta["taken"]), quality, position, scene)
 
 
 def list_baselines(folder: Path) -> list[str]:
@@ -92,7 +93,7 @@ def load_baseline(folder: Path, name: str) -> Baseline:
     return Baseline(
         name,
         jpg,
-        datetime.fromisoformat(meta["taken"]),
+        parse_time(meta["taken"]),
         meta.get("quality", "high"),
         (float(pos[0]), float(pos[1])) if pos else None,
         meta.get("scene"),

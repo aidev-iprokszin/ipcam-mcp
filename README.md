@@ -230,6 +230,11 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
 - **`timed out … (camera unreachable?)`**: the camera is offline or not reachable from this
   machine. See [WSL2 networking](#wsl2-networking).
 - **`ffmpeg not installed`**: `sudo apt install ffmpeg`.
+- **`camera.json … unreadable, kept as camera.json.bad-…`** in the log: a camera's
+  `camera.json` could not be read (for example after a bad hand edit), so a new one was written
+  and the old one kept next to it. To get the camera's creation time and scene history back,
+  fix the kept file and rename it to `camera.json` while the server is stopped. Timestamps
+  without a UTC offset are read as local time.
 
 ## Known limitations
 
@@ -237,6 +242,10 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
   see `Unclosed client session` warnings on stderr. They're harmless.
 - Filenames have one-second resolution; a second capture in the same second gets a `-2`, `-3`, …
   suffix.
+- Filenames carry local time without a UTC offset. In the hour that repeats when daylight
+  saving time ends, a capture counts as taken in the first of the two hours, and after the
+  machine's time zone changes, older captures shift by the difference. Both only matter for
+  captures close to a scene change: they can be assigned to the neighbouring scene.
 - Media files are never deleted. Clean up `~/.local/share/ipcam-mcp/media/` yourself.
 - HTTP transport has no authentication (see above).
 

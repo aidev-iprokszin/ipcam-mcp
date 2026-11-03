@@ -190,3 +190,24 @@ async def test_scene_tools_without_management(registry):
     async with Client(build_server(registry, None, allow_management=False)) as client:
         names = {t.name for t in (await client.list_tools()).tools}
     assert {"list_scenes", "scene_snapshot", "scene_compare", "scene_timeline"} <= names
+
+
+async def test_naive_times_in_camera_json_work(registry, tmp_path):
+    (tmp_path / "cccccccc" / "camera.json").write_text(
+        json.dumps(
+            {
+                "uid": "cccccccc",
+                "name": "old-door",
+                "created": "2025-01-01T00:00:00",
+                "scenes": [
+                    {"scene": "front-door", "since": "2025-01-01T00:00:00"},
+                    {"scene": "porch", "since": "2025-01-05T00:00:00"},
+                ],
+            }
+        )
+    )
+    r = await call(registry, "list_scenes")
+    assert not r.is_error, texts(r)
+    r = await call(registry, "scene_timeline", {"scene": "front-door"})
+    assert not r.is_error, texts(r)
+    assert "old-door" in texts(r)[0]

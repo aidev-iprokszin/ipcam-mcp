@@ -276,3 +276,58 @@ def test_enter_scene_starts_at_next_second(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_now", lambda: now)
     meta = enter_scene(tmp_path, "aaaaaaaa", "cam", "front-door")
     assert meta.scenes[-1].since == datetime(2026, 11, 3, 13, 0, 6).astimezone()
+
+
+def _backups(folder):
+    return sorted(p.name for p in folder.glob("camera.json.bad-*"))
+
+
+def test_ensure_folder_sets_aside_corrupt_meta(tmp_path, monkeypatch):
+    folder = tmp_path / "aaaaaaaa"
+    folder.mkdir()
+    (folder / "camera.json").write_text("{not json")
+    now = datetime(2026, 11, 3, 13, 0, 5).astimezone()
+    monkeypatch.setattr(store, "_now", lambda: now)
+    ensure_folder(tmp_path, "aaaaaaaa", "cam")
+    assert _backups(folder) == ["camera.json.bad-20261103-130005"]
+    assert (folder / "camera.json.bad-20261103-130005").read_text() == "{not json"
+    assert read_meta(folder).name == "cam"
+
+
+def test_set_aside_keeps_earlier_backup(tmp_path, monkeypatch):
+    folder = tmp_path / "aaaaaaaa"
+    folder.mkdir()
+    now = datetime(2026, 11, 3, 13, 0, 5).astimezone()
+    monkeypatch.setattr(store, "_now", lambda: now)
+    (folder / "camera.json.bad-20261103-130005").write_text("first")
+    (folder / "camera.json").write_text("second")
+    ensure_folder(tmp_path, "aaaaaaaa", "cam")
+    assert _backups(folder) == [
+        "camera.json.bad-20261103-130005",
+        "camera.json.bad-20261103-130005-2",
+    ]
+    assert (folder / "camera.json.bad-20261103-130005").read_text() == "first"
+
+
+def test_missing_meta_creates_no_backup(tmp_path):
+    folder = ensure_folder(tmp_path, "aaaaaaaa", "cam")
+    assert _backups(folder) == []
+    assert read_meta(folder).name == "cam"
+
+
+def test_read_meta_naive_times_are_local(tmp_path):
+    folder = tmp_path / "aaaaaaaa"
+    folder.mkdir()
+    (folder / "camera.json").write_text(
+        json.dumps(
+            {
+                "uid": "aaaaaaaa",
+                "name": "cam",
+                "created": "2026-11-01T10:00:00",
+                "scenes": [{"scene": "cam", "since": "2026-11-01T10:00:00"}],
+            }
+        )
+    )
+    meta = read_meta(folder)
+    assert meta.created == datetime(2026, 11, 1, 10).astimezone()
+    assert meta.scenes[0].since.tzinfo is not None

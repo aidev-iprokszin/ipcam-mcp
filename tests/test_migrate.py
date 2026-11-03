@@ -147,3 +147,13 @@ def test_unwritable_target_reports_instead_of_raising(tmp_path, monkeypatch):
     report = migrate_flat_layout(m, {"office": U})
     assert report.error is not None and "Permission denied" in report.error
     assert (m / "office_20261103-111200.jpg").exists()
+
+
+def test_corrupt_camera_json_is_set_aside(tmp_path):
+    m = tmp_path / "media"
+    office_flat(m)
+    put(m / U / "camera.json", b"{not json")
+    migrate_flat_layout(m, {"office": U})
+    backups = list((m / U).glob("camera.json.bad-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == b"{not json"
+    assert read_meta(m / U).name == "office"

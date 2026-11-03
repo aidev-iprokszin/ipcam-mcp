@@ -102,6 +102,7 @@ def _migrate_groups(
             report.removed_cameras.append(name)
         folder = store.camera_dir(media_dir, uid)
         if store.read_meta(folder) is None:
+            store.set_aside_bad_meta(folder)
             store.write_meta(folder, store.CameraMeta(uid, name, _created(group.captures)))
 
         moves = [(p, folder / p.name) for p in sorted(group.captures)]
