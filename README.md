@@ -10,7 +10,7 @@ Any ONVIF camera should work. See [known cameras](docs/cameras/) for what has be
 
 | Tool | What it does |
 |---|---|
-| `list_cameras` | Configured cameras and their capabilities (`camera`, `ptz`) |
+| `list_cameras(include_removed=False)` | Configured cameras with their uid and capabilities (`camera`, `ptz`); `include_removed=true` also lists removed cameras whose files are still on disk |
 | `camera_snapshot(camera, quality="high", crop=None, region=None, from_path=None)` | Returns the picture (≤1280 px wide) and saves the full-size JPEG. `crop=[x, y, w, h]` (fractions 0–1) or `region` (`top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`) returns a detail at full resolution. `from_path` crops an earlier snapshot without contacting the camera |
 | `camera_save_baseline(camera, name, quality="high")` | Takes a snapshot and keeps it as a named reference (e.g. `door-closed`) |
 | `camera_compare(camera, baseline=None, quality="high")` | Takes a snapshot and reports what changed against the previous snapshot, or against a named baseline |
@@ -135,11 +135,11 @@ then run `wsl --shutdown` from Windows.
 
 ## Managing cameras
 
-Instead of editing `cameras.toml` by hand you can let Claude add, rename and remove cameras.
+Instead of editing `cameras.toml` by hand you can let Claude add, rename, remove and delete cameras.
 This is on by default. To turn it off, set `allow_management = false` in `cameras.toml` (see
 `cameras.example.toml`), then run `/mcp reconnect ipcam`; the flag is only read at startup.
 Claude Code still asks before each tool call unless you allowlist it; if you allowlist the
-camera tools, consider leaving `remove_camera` and `ptz_remove_preset` off the list.
+camera tools, consider leaving `remove_camera`, `delete_camera` and `ptz_remove_preset` off the list.
 
 `add_camera` logs into whatever host it is given. Before you type a password into the login form,
 check that the IP it shows is your camera's (from the camera's app or your router), not one the
@@ -149,7 +149,8 @@ agent picked up elsewhere.
 |---|---|
 | `add_camera(name, host, credentials_via="form", onvif_port=None)` | Verifies the login over ONVIF (tries port 80, then 2020, unless you give `onvif_port`), detects pan/tilt, then adds the camera with a new uid. `name` is lowercase letters, digits, `-`, `_` (max 32) |
 | `rename_camera(old, new)` | Changes a camera's name; its uid, baselines, snapshots and recordings stay with it (no files move), and its secrets file is renamed too if the tool created it |
-| `remove_camera(id)` | Removes the camera from the config; never deletes snapshots or recordings |
+| `remove_camera(name)` | Removes the camera from the config; keeps its snapshots, recordings and baselines (it becomes a *removed camera*) |
+| `delete_camera(name)` | Deletes the camera (config entry, its managed secrets file) and its folder with all snapshots, recordings and baselines, or the leftover folder of a removed camera with that name. **You** approve it in a form listing what will be deleted; with several matches you pick one or all. Without form support nothing is deleted and the result says what to delete by hand |
 | `reload_cameras()` | Always available. Re-reads `cameras.toml` after a manual edit and lists the cameras |
 
 Changes apply immediately, without restarting the server. If loading the new config fails, the

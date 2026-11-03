@@ -444,14 +444,20 @@ def answering(action: str, content: dict | None = None):
 async def test_management_tools_on_by_default(managed):
     _, reg, manager = managed
     names = await tool_names(build_server(reg, manager))
-    assert {"add_camera", "rename_camera", "remove_camera", "reload_cameras"} <= names
+    assert {
+        "add_camera",
+        "rename_camera",
+        "remove_camera",
+        "delete_camera",
+        "reload_cameras",
+    } <= names
 
 
 async def test_management_tools_hidden_when_disabled(managed):
     _, reg, manager = managed
     names = await tool_names(build_server(reg, manager, allow_management=False))
     assert "reload_cameras" in names
-    assert not {"add_camera", "rename_camera", "remove_camera"} & names
+    assert not {"add_camera", "rename_camera", "remove_camera", "delete_camera"} & names
     names = await tool_names(build_server(reg))
     assert "reload_cameras" not in names
     assert "add_camera" not in names
@@ -461,7 +467,13 @@ async def test_management_tools_present_when_allowed(managed):
     _, reg, manager = managed
     server = build_server(reg, manager, allow_management=True)
     names = await tool_names(server)
-    assert {"add_camera", "rename_camera", "remove_camera", "reload_cameras"} <= names
+    assert {
+        "add_camera",
+        "rename_camera",
+        "remove_camera",
+        "delete_camera",
+        "reload_cameras",
+    } <= names
     async with Client(server) as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
     props = tools["add_camera"].input_schema["properties"]
@@ -596,8 +608,8 @@ async def test_rename_and_remove_camera(managed):
     server = build_server(reg, manager, allow_management=True)
     async with Client(server) as client:
         renamed = await client.call_tool("rename_camera", {"old": "office", "new": "study"})
-        removed = await client.call_tool("remove_camera", {"id": "study"})
-        missing = await client.call_tool("remove_camera", {"id": "nope"})
+        removed = await client.call_tool("remove_camera", {"name": "study"})
+        missing = await client.call_tool("remove_camera", {"name": "nope"})
     assert "renamed 'office' to 'study'" in text_of(renamed)
     assert "removed 'study'" in text_of(removed)
     assert missing.is_error
@@ -800,3 +812,91 @@ def test_main_refuses_loopback_without_sdk_protection(monkeypatch, tmp_path, cap
     with pytest.raises(SystemExit) as e:
         main(["--transport", "http", "--host", host])
     assert e.value.code == 2 and "--allow-remote" in capsys.readouterr().err
+
+
+# --- delete_camera / removed cameras ---
+
+
+def leftover(media: Path, uid: str = "zzzzzzzz", name: str = "garage") -> Path:
+    from datetime import datetime as dt
+
+    from ipcam_mcp.store import CameraMeta, write_meta
+
+    folder = media / uid
+    write_meta(folder, CameraMeta(uid, name, dt(2025, 1, 1).astimezone()))
+    (folder / f"{name}_20250101-000000.jpg").write_bytes(b"x")
+    return folder
+
+
+async def test_delete_camera_form_flow(managed, tmp_path):
+    _, reg, manager = managed
+    folder = leftover(tmp_path / "media")
+    cb = answering("accept", {"confirm": True})
+    server = build_server(reg, manager, allow_management=True)
+    async with Client(server, mode="legacy", elicitation_callback=cb) as client:
+        r = await client.call_tool("delete_camera", {"name": "garage"})
+    assert not r.is_error, text_of(r)
+    assert text_of(r).startswith("deleted 'garage'")
+    assert not folder.exists()
+    params = cb.calls[0]
+    assert "cannot be undone" in params.message
+    assert (
+        "garage (removed, added 2025-01-01)"
+        in params.requested_schema["properties"]["confirm"]["description"]
+    )
+
+
+async def test_delete_camera_form_unchecked_cancels(managed, tmp_path):
+    _, reg, manager = managed
+    folder = leftover(tmp_path / "media")
+    server = build_server(reg, manager, allow_management=True)
+    cb = answering("accept", {"confirm": False})
+    async with Client(server, mode="legacy", elicitation_callback=cb) as client:
+        r = await client.call_tool("delete_camera", {"name": "garage"})
+    assert text_of(r) == "cancelled; nothing was deleted"
+    assert folder.exists()
+
+
+async def test_delete_camera_form_choice(managed, tmp_path):
+    _, reg, manager = managed
+    first = leftover(tmp_path / "media", "yyyyyyyy")
+    second = leftover(tmp_path / "media", "zzzzzzzz")
+    server = build_server(reg, manager, allow_management=True)
+    async with Client(
+        server, mode="legacy", elicitation_callback=answering("accept", {"target": "all of them"})
+    ) as client:
+        r = await client.call_tool("delete_camera", {"name": "garage"})
+    assert not r.is_error, text_of(r)
+    assert not first.exists() and not second.exists()
+
+
+async def test_delete_camera_no_form_client(managed, tmp_path):
+    _, reg, manager = managed
+    folder = leftover(tmp_path / "media")
+    server = build_server(reg, manager, allow_management=True)
+    async with Client(server) as client:
+        r = await client.call_tool("delete_camera", {"name": "garage"})
+    assert not r.is_error
+    assert "nothing was deleted" in text_of(r) and str(folder) in text_of(r)
+    assert folder.exists()
+
+
+async def test_list_cameras_include_removed(managed, tmp_path):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    server = build_server(reg, manager, allow_management=True)
+    async with Client(server) as client:
+        default = json.loads(text_of(await client.call_tool("list_cameras", {})))
+        full = json.loads(
+            text_of(await client.call_tool("list_cameras", {"include_removed": True}))
+        )
+    assert [c["id"] for c in default] == ["office"]
+    assert full[1] == {
+        "id": "garage",
+        "uid": "zzzzzzzz",
+        "removed": True,
+        "created": "2025-01-01",
+        "snapshots": 1,
+        "recordings": 0,
+        "baselines": 0,
+    }

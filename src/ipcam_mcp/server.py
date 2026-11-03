@@ -15,9 +15,9 @@ from mcp.server.elicitation import AcceptedElicitation
 from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
-from ipcam_mcp import baselines
+from ipcam_mcp import baselines, store
 from ipcam_mcp.capabilities import PTZ, Amount, Direction, Quality
 from ipcam_mcp.config import AppConfig, config_path
 from ipcam_mcp.errors import CameraMcpError, ConfigError, DeviceError
@@ -77,6 +77,21 @@ Region = Literal[
 
 FORM_FAILED = 'the login form failed; nothing was changed; retry with credentials_via="file"'
 NO_FORM_PREFIX = "This client can't show login forms; using the secrets file instead. "
+
+
+DELETE_ALL = "all of them"
+
+
+def _delete_form(targets: list[str]) -> type[BaseModel]:
+    """Approval form for delete_camera: a checkbox for one target, a choice for several."""
+    if len(targets) == 1:
+        return create_model(
+            "DeleteForm", confirm=(bool, Field(default=False, description=f"Delete {targets[0]}"))
+        )
+    choices = Literal[(*targets, DELETE_ALL)]  # type: ignore[valid-type]
+    return create_model(
+        "DeleteForm", target=(choices, Field(description="What to delete (cannot be undone)"))
+    )
 
 
 class _LoginForm(BaseModel):
@@ -156,9 +171,25 @@ def build_server(
         empty_hint = "No cameras configured. Add one to cameras.toml, then restart or reload."
 
     @mcp.tool()
-    async def list_cameras() -> str:
-        """List configured cameras with their ids, types and capabilities (camera, ptz)."""
+    async def list_cameras(include_removed: bool = False) -> str:
+        """List configured cameras with their ids (names), uids, types and capabilities
+        (camera, ptz). include_removed=true also lists removed cameras whose files are still
+        on disk ("removed": true), e.g. to clean them up with delete_camera."""
         cameras = registry.list()
+        if include_removed:
+            configured = {c["uid"] for c in cameras}
+            cameras += [
+                {
+                    "id": c.name,
+                    "uid": c.uid,
+                    "removed": True,
+                    "created": c.created.date().isoformat(),
+                    "snapshots": c.snapshots,
+                    "recordings": c.recordings,
+                    "baselines": c.baselines,
+                }
+                for c in store.removed_cameras(registry.media_dir, configured)
+            ]
         return json.dumps(cameras) if cameras else empty_hint
 
     def resolve_source(from_path: str) -> Path:
@@ -409,9 +440,35 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
         return await _guarded(lambda: manager.rename(old, new))
 
     @mcp.tool()
-    async def remove_camera(id: str) -> str:
-        """Remove a camera from the configuration. Never deletes snapshots or recordings."""
-        return await _guarded(lambda: manager.remove(id))
+    async def remove_camera(name: str) -> str:
+        """Remove a camera from the configuration. Never deletes snapshots or recordings
+        (delete_camera does, after the user approves)."""
+        return await _guarded(lambda: manager.remove(name))
+
+    @mcp.tool()
+    async def delete_camera(name: str, ctx: Context) -> str:
+        """Delete a camera and all its snapshots, recordings and baselines, or the leftover
+        files of a removed camera with that name. The user approves in a form that lists what
+        will be deleted; you cannot approve it. Without form support nothing is deleted and the
+        result says how to do it by hand."""
+
+        async def confirm(message: str, targets: list[str]) -> int | Literal["all"] | None:
+            form = _delete_form(targets)
+            try:
+                result = await ctx.elicit(message, form)
+            except MCPError:
+                raise ValueError("the approval form failed; nothing was deleted") from None
+            if not isinstance(result, AcceptedElicitation):
+                return None
+            if len(targets) == 1:
+                return 0 if result.data.confirm else None
+            choice = result.data.target
+            return "all" if choice == DELETE_ALL else targets.index(choice)
+
+        async def run() -> str:
+            return await manager.delete(name, confirm if _can_show_form(ctx) else None)
+
+        return await _guarded(run)
 
 
 async def _json_list(manager: Manager) -> str:
