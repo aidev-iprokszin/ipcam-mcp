@@ -520,14 +520,14 @@ async def test_remove_reload_failure_keeps_secrets(env):
 
 async def test_reload_returns_list(env):
     cfg, _, _ = env
-    mgr, _, _ = make_manager(cfg)
+    mgr, _, _ = make_manager(cfg, load=prepare_config)
     text = cfg.read_text().replace("[cameras.office]", "[cameras.desk]")
     cfg.write_text(text)
     assert await mgr.reload() == [
         {
             "id": "desk",
             "uid": uid_for("office"),
-            "scene": "desk",
+            "scene": "desk",  # no media folder yet: no history to keep
             "type": "tapo_onvif",
             "capabilities": ["camera", "ptz"],
         }
@@ -974,3 +974,42 @@ async def test_add_with_scene(env):
     assert read_meta(registry.folder("garage")).scenes[0].scene == "front-door"
     await mgr.add("carport", "10.0.0.6", prompt_with(Credentials(USER, PASSWORD)), scene="carport")
     assert "scene" not in tomllib.loads(cfg.read_text())["cameras"]["carport"]
+
+
+async def test_hand_rename_keeps_scene(env):
+    """Renaming the section by hand is a rename, not a move: the scene is pinned."""
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg, load=prepare_config)
+    folder = registry.folder("office")
+    cfg.write_text(cfg.read_text().replace("[cameras.office]", "[cameras.desk]"))
+    listed = await mgr.reload()
+    assert listed[0]["scene"] == "office"
+    assert tomllib.loads(cfg.read_text())["cameras"]["desk"]["scene"] == "office"
+    assert [p.scene for p in read_meta(folder).scenes] == ["office"]
+
+
+async def test_set_scene_returns_once_the_new_period_has_started(env):
+    """A capture right after set_scene must be stamped in the new scene."""
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    await mgr.set_scene("office", "desk")
+    assert datetime.now().astimezone() >= read_meta(folder).scenes[-1].since
+
+
+def test_scene_sync_io_error_is_logged_not_fatal(env, monkeypatch, caplog):
+    cfg, _, _ = env
+    _, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    cfg.write_text(
+        cfg.read_text().replace("[cameras.office]\n", '[cameras.office]\nscene = "desk"\n')
+    )
+
+    def fail(*a, **kw):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(store, "enter_scene", fail)
+    with caplog.at_level("WARNING", logger="ipcam_mcp"):
+        config = prepare_config(cfg)
+    assert config.devices["office"].scene == "desk"
+    assert "could not record" in caplog.text

@@ -90,23 +90,47 @@ def prepare_config(path: Path) -> AppConfig:
                     name, media_dir / old, name, old, path,
                 )  # fmt: skip
     config = load_config(path, missing_ok=True)
-    _sync_scenes(config)
+    if _sync_scenes(path, config):
+        config = load_config(path, missing_ok=True)
     return config
 
 
-def _sync_scenes(config: AppConfig) -> None:
-    """Record scene changes made by hand in cameras.toml as a new period."""
+def _sync_scenes(path: Path, config: AppConfig) -> bool:
+    """Record scene changes made by hand in cameras.toml as a new period.
+
+    A section renamed by hand (no ``scene`` line, so the scene would follow the new name) is a
+    rename like rename_camera's: its scene is pinned to the old one. Returns whether
+    ``path`` was changed.
+    """
+    try:
+        sections = tomllib.loads(path.read_text(encoding="utf-8")).get("cameras", {})
+    except (OSError, tomllib.TOMLDecodeError):
+        sections = {}
+    changed = False
     for name, dev in config.devices.items():
         folder = config.media_dir / dev.uid
         meta = store.read_meta(folder) if folder.is_dir() else None
-        if meta is not None and meta.current_scene != dev.scene:
+        if meta is None or meta.current_scene == dev.scene:
+            continue
+        if meta.name != name and "scene" not in sections.get(name, {}):
+            config_writer.set_key(path, name, "scene", meta.current_scene)
+            log.info("camera '%s' was renamed from '%s'; it keeps scene '%s'",
+                     name, meta.name, meta.current_scene)  # fmt: skip
+            changed = True
+            continue
+        try:
             store.enter_scene(config.media_dir, dev.uid, name, dev.scene)
-            log.info(
-                "camera '%s' is now in scene '%s'; set_scene can declare it the successor of "
-                "a removed camera",
-                name,
-                dev.scene,
-            )
+        except OSError as e:
+            log.warning("camera '%s': could not record scene '%s' in %s: %s",
+                        name, dev.scene, folder, e.strerror or e)  # fmt: skip
+            continue
+        log.info(
+            "camera '%s' is now in scene '%s'; set_scene can declare it the successor of "
+            "a removed camera",
+            name,
+            dev.scene,
+        )
+    return changed
 
 
 class Manager:
@@ -259,7 +283,12 @@ class Manager:
                     close_retired=False,  # needs the camera lock held here
                 )
                 dev = self._registry.config(camera)
-                store.enter_scene(config.media_dir, dev.uid, camera, scene)
+                meta = store.enter_scene(config.media_dir, dev.uid, camera, scene)
+                # Capture names have whole seconds and the period starts at the next one:
+                # hold the camera until then, so no later capture is stamped in the old scene.
+                wait = (meta.scenes[-1].since - datetime.now().astimezone()).total_seconds()
+                if wait > 0:
+                    await asyncio.sleep(wait)
             await self._registry.close_retired()
             return f"moved '{camera}' to scene '{scene}'"
 
