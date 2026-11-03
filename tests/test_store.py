@@ -366,14 +366,18 @@ def test_ensure_folder_sets_aside_meta_of_other_camera(tmp_path):
     assert (meta.uid, meta.name) == ("aaaaaaaa", "cam")
 
 
-def test_enter_scene_back_keeps_predecessor(tmp_path):
+def test_enter_scene_records_only_the_given_predecessor(tmp_path):
+    """Carrying a predecessor over is the caller's decision (it knows what is configured)."""
     ensure_folder(tmp_path, "aaaaaaaa", "cam")
     enter_scene(tmp_path, "aaaaaaaa", "cam", "garage", continues="zzzzzzzz")
-    enter_scene(tmp_path, "aaaaaaaa", "cam", "cam")
+    away = enter_scene(tmp_path, "aaaaaaaa", "cam", "cam")
+    assert store.earlier_predecessor(away, "garage") == "zzzzzzzz"
     meta = enter_scene(tmp_path, "aaaaaaaa", "cam", "garage")
-    assert [(p.scene, p.continues) for p in meta.scenes] == [
-        ("cam", None),
-        ("garage", "zzzzzzzz"),
-        ("cam", None),
-        ("garage", "zzzzzzzz"),
-    ]
+    assert meta.scenes[-1].continues is None
+
+
+def test_enter_scene_unreadable_after_write_raises_os_error(tmp_path, monkeypatch):
+    ensure_folder(tmp_path, "aaaaaaaa", "cam")
+    monkeypatch.setattr(store, "read_meta", lambda folder: None)
+    with pytest.raises(OSError):
+        enter_scene(tmp_path, "aaaaaaaa", "cam", "garage")

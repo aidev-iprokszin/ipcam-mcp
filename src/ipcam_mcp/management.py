@@ -133,8 +133,12 @@ def sync_scenes(path: Path, config: AppConfig) -> bool:
                      name, meta.name, meta.current_scene)  # fmt: skip
             changed = True
             continue
+        # Back in a scene: the predecessor it had there carries over, unless it is configured.
+        pred = store.earlier_predecessor(meta, dev.scene)
+        if pred in {d.uid for d in config.devices.values()}:
+            pred = None
         try:
-            store.enter_scene(config.media_dir, dev.uid, name, dev.scene)
+            store.enter_scene(config.media_dir, dev.uid, name, dev.scene, pred)
         except OSError as e:
             log.warning("camera '%s': could not record scene '%s' in %s: %s",
                         name, dev.scene, folder, e.strerror or e)  # fmt: skip
@@ -177,8 +181,8 @@ class Manager:
         try:
             if self._sync(self._config_path, config):
                 self._registry.reload(self._load(self._config_path))
-        except (OSError, ConfigError) as e:
-            log.warning("could not record scene changes: %s", e)
+        except Exception:
+            log.warning("could not record scene changes", exc_info=True)
 
     async def add(
         self,
@@ -397,7 +401,7 @@ class Manager:
                     return await self._declare_successor(config, camera, scene, successor)
                 again = self._predecessor_there(config, dev.uid, scene)
                 if again is not None:  # back in a scene: its predecessor there carries over
-                    pred, note = None, f"; continues '{again}' again"
+                    pred, note = None, f"; continues '{again.name}' again"
                 else:
                     pred, note = await self._ask_successor(config, camera, scene, successor)
             except _Cancelled:
@@ -413,7 +417,11 @@ class Manager:
                     note = f"; continues '{pred.name}'"
                 try:
                     meta = store.enter_scene(
-                        config.media_dir, dev.uid, camera, scene, pred.uid if pred else None
+                        config.media_dir,
+                        dev.uid,
+                        camera,
+                        scene,
+                        pred.uid if pred else again.uid if again else None,
                     )
                 except OSError as e:  # the move is done; the next reload records the period
                     note = f"; could not record the move in its media folder ({os_error_text(e)})"
@@ -430,12 +438,15 @@ class Manager:
             return f"moved '{camera}' to scene '{scene}'{note}"
 
     @staticmethod
-    def _predecessor_there(config: AppConfig, uid: str, scene: str) -> str | None:
-        """The name of the predecessor the camera had when it was last in ``scene``."""
+    def _predecessor_there(config: AppConfig, uid: str, scene: str) -> store.CameraMeta | None:
+        """The removed camera that was this camera's predecessor when it was last in
+        ``scene``, if its folder is still there."""
         meta = store.read_meta(config.media_dir / uid)
         pred = store.earlier_predecessor(meta, scene) if meta else None
-        found = store.read_meta(config.media_dir / pred) if pred else None
-        return found.name if found else None
+        if pred is None or pred in {d.uid for d in config.devices.values()}:
+            return None
+        found = store.read_meta(config.media_dir / pred)
+        return found if found is not None and found.uid == pred else None
 
     async def _declare_successor(
         self, config: AppConfig, camera: str, scene: str, successor: SuccessorPrompt | None

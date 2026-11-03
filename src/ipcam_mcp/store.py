@@ -7,6 +7,7 @@ does not inherit it.
 """
 
 import contextlib
+import errno
 import json
 import logging
 import os
@@ -214,19 +215,17 @@ def enter_scene(
     media_dir: Path, uid: str, name: str, scene: str, continues: str | None = None
 ) -> CameraMeta:
     """Record that the camera watches ``scene`` from now on (optionally as the successor of
-    ``continues``). Re-entering the current scene only sets ``continues`` on its period;
-    returning to an earlier scene keeps the predecessor it had there."""
+    ``continues``). Re-entering the current scene only sets ``continues`` on its period."""
     folder = ensure_folder(media_dir, uid, name, scene)
     meta = read_meta(folder)
-    assert meta is not None  # ensure_folder just wrote it
+    if meta is None:  # ensure_folder just wrote it, so reading it failed
+        raise OSError(errno.EIO, "could not read it back", str(folder / META))
     last = meta.scenes[-1]
     if last.scene == scene:
         if continues is None or last.continues == continues:
             return meta
         periods = (*meta.scenes[:-1], replace(last, continues=continues))
     else:
-        if continues is None:
-            continues = earlier_predecessor(meta, scene)
         # Capture names have whole seconds: the new period starts at the next one, so a
         # capture taken in the second of the move stays with the old scene.
         periods = (*meta.scenes, Period(scene, _now() + timedelta(seconds=1), continues))

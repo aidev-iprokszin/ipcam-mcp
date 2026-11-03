@@ -1,6 +1,7 @@
 import asyncio
 import errno
 import re
+import shutil
 import stat
 import tomllib
 from datetime import datetime
@@ -1299,3 +1300,67 @@ async def test_set_scene_back_keeps_predecessor_without_asking(env):
     assert result == "moved 'office' to scene 'garage'; continues 'garage' again"
     assert again.calls == []
     assert last_period(registry, "office").continues == "zzzzzzzz"
+
+
+async def test_set_scene_back_after_predecessor_deleted_records_none(env):
+    cfg, _, _ = env
+    folder = removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    await mgr.set_scene("office", "garage", successor=asking(0))
+    await mgr.set_scene("office", "office")
+    shutil.rmtree(folder)
+    assert await mgr.set_scene("office", "garage") == "moved 'office' to scene 'garage'"
+    assert last_period(registry, "office").continues is None
+
+
+async def test_set_scene_back_does_not_carry_a_configured_camera(env):
+    cfg, _, shared = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    await mgr.set_scene("office", "garage", successor=asking(0))
+    await mgr.set_scene("office", "office")
+    cfg.write_text(
+        cfg.read_text() + '\n[cameras.garage]\nuid = "zzzzzzzz"\ntype = "tapo_onvif"\n'
+        f'secrets_file = "{shared}"\nhost_var = "OFFICE_HOST"\nuser_var = "OFFICE_USER"\n'
+        'password_var = "OFFICE_PASS"\n'
+    )
+    await mgr.reload()
+    assert await mgr.set_scene("office", "garage") == "moved 'office' to scene 'garage'"
+    assert last_period(registry, "office").continues is None
+
+
+async def test_hand_edit_back_keeps_predecessor(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    await mgr.set_scene("office", "garage", successor=asking(0))
+    await mgr.set_scene("office", "office")
+    cfg.write_text(cfg.read_text().replace('scene = "office"', 'scene = "garage"'))
+    await mgr.reload()
+    assert (last_period(registry, "office").scene, last_period(registry, "office").continues) == (
+        "garage",
+        "zzzzzzzz",
+    )
+
+
+async def test_failure_after_commit_still_succeeds(env, caplog):
+    cfg, _, _ = env
+
+    calls = 0
+
+    def broken_sync(path, config):
+        nonlocal calls
+        calls += 1
+        if calls > 1:  # the first call is the hand-edit sync before the change
+            raise AssertionError("boom")
+        return False
+
+    registry = Registry(load_config(cfg), adapters={"tapo_onvif": FakeCamPTZ, "onvif": FakeCamPTZ})
+    mgr = Manager(cfg, registry, probe=FakeProbe(), sync=broken_sync)
+    with caplog.at_level("WARNING", logger="ipcam_mcp"):
+        result = await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    assert result.startswith("added 'garage'")
+    assert "could not record scene changes" in caplog.text
