@@ -2,6 +2,9 @@
 
 Thanks for your interest! Bug reports, camera reports and pull requests are welcome.
 
+This project follows a [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to
+uphold it.
+
 ## Reporting
 
 - **Bugs and questions:** open an issue. Include your camera brand/model, the config `type`,

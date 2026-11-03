@@ -228,7 +228,8 @@ A new camera feature (e.g. privacy mode) gets a `Protocol` in `capabilities.py`,
 
 ## Contributing
 
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 This project was built with [Claude Code](https://claude.com/claude-code).
 
