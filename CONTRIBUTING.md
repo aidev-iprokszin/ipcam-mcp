@@ -36,14 +36,29 @@ ran them, and against which camera.
 
 Every change starts with an issue, also for the maintainer:
 
-1. **Open an issue** (or comment on an existing one) describing the problem or idea. For larger
-   changes, wait for a short go-ahead so no work is wasted.
+1. **Open an issue** describing the problem or idea, or comment on an existing one (see
+   [Picking up an issue](#picking-up-an-issue)). For larger changes, wait for a short go-ahead
+   so no work is wasted.
 2. **Branch** from `main`, e.g. `12-short-description`.
 3. **Open a pull request** whose description contains `Closes #12`. A check named
    `linked-issue` fails pull requests that don't close an issue.
 4. **CI** (`test`) must pass. Pull requests are **squash-merged**, and the issue closes
    automatically.
 5. Merged pull requests appear in the next **release notes**, with your name.
+
+### Picking up an issue
+
+So that two people don't fix the same thing at once:
+
+1. Check that the issue has no assignee and no `in progress` label, and that no open pull
+   request already closes it (shown under *Development* in the issue's sidebar).
+2. Comment that you'd like to work on it. The maintainer assigns the issue to you; the
+   `in progress` label then appears on its own. The maintainer does the same for their own work.
+3. If you get stuck or lose interest, say so in the issue, so it can be freed. An issue with no
+   visible progress for about two weeks may be unassigned and offered to others.
+
+An issue labelled `blocked` waits on something else (see its comments); it isn't ready to
+pick up. Issues labelled `good first issue` are a good place to start.
 
 ### Pull request guidelines
 
@@ -60,7 +75,8 @@ Every change starts with an issue, also for the maintainer:
 Versions follow [Semantic Versioning](https://semver.org). To release:
 
 1. In a pull request (with its issue), bump `version` in `pyproject.toml` and run `uv lock`.
-2. After merging: `git switch main && git pull && git tag vX.Y.Z && git push origin vX.Y.Z`.
+2. After merging, tag the release (an annotated tag; `v*` tags can't be moved or deleted):
+   `git switch main && git pull && git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
 3. The `Release` workflow checks that the tag matches the version, runs the tests, builds the
    wheel and sdist, and publishes a GitHub Release with generated notes.
 

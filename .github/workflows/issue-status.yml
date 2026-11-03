@@ -1,0 +1,42 @@
+name: Issue status
+
+# Keeps the "in progress" label in step with assignment (see "Picking up an issue" in
+# CONTRIBUTING.md). Issue events only: runs in this repository's context and never with code
+# from a pull request, so the write token is safe.
+on:
+  issues:
+    types: [assigned, unassigned, closed, reopened]
+
+permissions:
+  issues: write
+
+# One run per issue at a time; each run sets the labels from the issue's current state, so the
+# last one wins even if events arrive close together.
+concurrency:
+  group: issue-status-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Match the labels to the issue's current state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          read -r state assignees in_progress blocked < <(gh api "repos/$REPO/issues/$ISSUE" --jq \
+            '[.state, (.assignees | length), ([.labels[].name] | index("in progress") != null),
+              ([.labels[].name] | index("blocked") != null)] | @tsv')
+          if [ "$state" = open ] && [ "$assignees" -gt 0 ]; then
+            if [ "$in_progress" = false ]; then
+              gh api "repos/$REPO/issues/$ISSUE/labels" -f 'labels[]=in progress' --silent
+            fi
+          elif [ "$in_progress" = true ]; then
+            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/in%20progress" --silent
+          fi
+          if [ "$state" = closed ] && [ "$blocked" = true ]; then
+            gh api -X DELETE "repos/$REPO/issues/$ISSUE/labels/blocked" --silent
+          fi
