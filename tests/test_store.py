@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import datetime
 
@@ -9,10 +10,13 @@ from ipcam_mcp.store import (
     UID_PATTERN,
     CameraMeta,
     camera_dir,
+    delete_folder,
     ensure_folder,
     folder_names,
     new_uid,
     read_meta,
+    removed_cameras,
+    usage,
     write_meta,
 )
 
@@ -81,3 +85,86 @@ def test_folder_names(tmp_path):
     (tmp_path / "k3f9x2ab").mkdir()
     (tmp_path / "file.jpg").write_bytes(b"x")
     assert folder_names(tmp_path) == {"k3f9x2ab"}
+
+
+# --- removed cameras, usage, delete ---
+
+
+def _camera(media, uid, name, created=datetime(2025, 1, 1, 12, 0)):
+    folder = media / uid
+    write_meta(folder, CameraMeta(uid, name, created.astimezone()))
+    return folder
+
+
+def test_usage_counts(tmp_path):
+    folder = _camera(tmp_path, "aaaaaaaa", "office")
+    (folder / "office_20261103-111200.jpg").write_bytes(b"x" * 100)
+    (folder / "study_20261103-111300.jpg").write_bytes(b"x" * 100)
+    (folder / "office_20261103-111400.mp4").write_bytes(b"x" * 1000)
+    (folder / "notes.txt").write_bytes(b"x" * 10)
+    (folder / "baselines").mkdir()
+    (folder / "baselines" / "door.jpg").write_bytes(b"x" * 50)
+    (folder / "baselines" / "door.json").write_text("{}")
+    (folder / "baselines" / "orphan.json").write_text("{}")
+    used = usage(folder, read_meta(folder))
+    assert (used.snapshots, used.recordings, used.baselines) == (2, 1, 1)
+    assert used.size == sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
+    assert used.uid == "aaaaaaaa" and used.name == "office" and used.folder == folder
+
+
+def test_removed_cameras_excludes_configured_and_unreadable(tmp_path):
+    _camera(tmp_path, "bbbbbbbb", "garage", datetime(2025, 3, 1))
+    _camera(tmp_path, "aaaaaaaa", "garage", datetime(2025, 1, 1))
+    _camera(tmp_path, "cccccccc", "office")
+    (tmp_path / "dddddddd").mkdir()  # no camera.json
+    (tmp_path / "not-a-uid").mkdir()
+    found = removed_cameras(tmp_path, {"cccccccc"})
+    assert [(c.uid, c.name) for c in found] == [("aaaaaaaa", "garage"), ("bbbbbbbb", "garage")]
+    assert removed_cameras(tmp_path / "missing", set()) == []
+
+
+def test_delete_folder_removes(tmp_path):
+    folder = _camera(tmp_path, "aaaaaaaa", "office")
+    (folder / "baselines").mkdir()
+    (folder / "baselines" / "door.jpg").write_bytes(b"x")
+    assert delete_folder(tmp_path, "aaaaaaaa") == []
+    assert not folder.exists()
+    assert delete_folder(tmp_path, "aaaaaaaa") == []  # already gone
+
+
+def test_delete_folder_refuses_symlink(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.jpg").write_bytes(b"x")
+    media = tmp_path / "media"
+    media.mkdir()
+    (media / "aaaaaaaa").symlink_to(outside)
+    with pytest.raises(ValueError, match="symlink"):
+        delete_folder(media, "aaaaaaaa")
+    assert (outside / "keep.jpg").exists()
+
+
+def test_delete_folder_refuses_bad_uid(tmp_path):
+    with pytest.raises(ValueError):
+        delete_folder(tmp_path, "../x")
+
+
+def test_delete_folder_with_symlinked_media_dir(tmp_path):
+    real = tmp_path / "disk"
+    folder = _camera(real, "aaaaaaaa", "office")
+    link = tmp_path / "media"
+    link.symlink_to(real)
+    assert delete_folder(link, "aaaaaaaa") == []
+    assert not folder.exists()
+
+
+def test_delete_folder_reports_leftovers(tmp_path, monkeypatch):
+    folder = _camera(tmp_path, "aaaaaaaa", "office")
+    stuck = folder / "office_20261103-111200.jpg"
+    stuck.write_bytes(b"x")
+
+    def fake_rmtree(path, onexc):
+        onexc(os.unlink, str(stuck), PermissionError(13, "Permission denied"))
+
+    monkeypatch.setattr(store.shutil, "rmtree", fake_rmtree)
+    assert delete_folder(tmp_path, "aaaaaaaa") == [stuck]
