@@ -1,4 +1,5 @@
 import asyncio
+import os
 import stat
 import tomllib
 from pathlib import Path
@@ -8,6 +9,7 @@ from conftest import FakeCamPTZ
 from dotenv import dotenv_values
 
 from ipcam_mcp.adapters.onvif import DeviceInfo
+from ipcam_mcp.baselines import latest_snapshot
 from ipcam_mcp.config import load_config
 from ipcam_mcp.errors import ConfigError, DeviceError
 from ipcam_mcp.management import Credentials, Manager, validate_host, validate_id
@@ -419,6 +421,85 @@ async def test_rename_reload_failure_rolls_back(env):
     assert ids(registry) == ["office", "garage"]
 
 
+def _office_media(cfg: Path) -> Path:
+    media = cfg.parent / "media"
+    (media / "baselines" / "office").mkdir(parents=True)
+    (media / "baselines" / "office" / "door.jpg").write_bytes(b"jpg")
+    (media / "baselines" / "office" / "door.json").write_text("{}")
+    (media / "office_20261103-111200.jpg").write_bytes(b"jpg")
+    return media
+
+
+async def test_rename_moves_baselines_and_snapshots(env):
+    cfg, _, _ = env
+    media = _office_media(cfg)
+    mgr, registry, _ = make_manager(cfg)
+
+    await mgr.rename("office", "front")
+
+    assert (media / "baselines" / "front" / "door.jpg").exists()
+    assert not (media / "baselines" / "office").exists()
+    assert latest_snapshot(media, "front") == media / "front_20261103-111200.jpg"
+    assert latest_snapshot(media, "office") is None
+    assert ids(registry) == ["front"]
+
+
+async def test_rename_refuses_when_new_id_has_media(env):
+    cfg, _, _ = env
+    media = _office_media(cfg)
+    (media / "front_20250101-000000.jpg").write_bytes(b"old")
+    before = cfg.read_bytes()
+    mgr, registry, _ = make_manager(cfg)
+
+    with pytest.raises(ValueError, match="'front' already exist"):
+        await mgr.rename("office", "front")
+    assert cfg.read_bytes() == before
+    assert (media / "office_20261103-111200.jpg").exists()
+    assert ids(registry) == ["office"]
+
+
+async def test_rename_reload_failure_moves_media_back(env):
+    cfg, _, _ = env
+    media = _office_media(cfg)
+    calls = 0
+
+    def load(path: Path):
+        nonlocal calls
+        calls += 1
+        if calls == 2:  # rename: 1, then the reload (2)
+            raise ConfigError("boom")
+        return load_config(path)
+
+    mgr, _, _ = make_manager(cfg, load=load)
+    with pytest.raises(ConfigError, match="boom"):
+        await mgr.rename("office", "front")
+    assert (media / "baselines" / "office" / "door.jpg").exists()
+    assert (media / "office_20261103-111200.jpg").exists()
+    assert not (media / "baselines" / "front").exists()
+
+
+async def test_rename_waits_for_running_camera_op(env):
+    cfg, _, _ = env
+    media = _office_media(cfg)
+    mgr, registry, _ = make_manager(cfg)
+    order: list[str] = []
+
+    async def capture():
+        async with registry.lock("office"):
+            await asyncio.sleep(0.05)
+            (media / "office_20261103-111300.jpg").write_bytes(b"jpg")
+            order.append("capture done")
+
+    task = asyncio.create_task(capture())
+    await asyncio.sleep(0)  # let the capture take the lock
+    await mgr.rename("office", "front")
+    order.append("renamed")
+    await task
+
+    assert order == ["capture done", "renamed"]
+    assert latest_snapshot(media, "front") == media / "front_20261103-111300.jpg"
+
+
 async def test_rename_shared_secrets_untouched(env):
     cfg, _, shared = env
     mgr, registry, _ = make_manager(cfg)
@@ -579,3 +660,28 @@ async def test_rename_remove_with_missing_config_not_found(fresh, op):
         else:
             await mgr.remove("garage")
     assert not cfg.exists()
+
+
+async def test_rename_secrets_move_failure_moves_media_back(env, monkeypatch):
+    cfg, secrets_dir, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    media = cfg.parent / "media"
+    media.mkdir(exist_ok=True)
+    (media / "garage_20261103-111200.jpg").write_bytes(b"jpg")
+    before = cfg.read_bytes()
+    real_rename = os.rename
+
+    def fail_on_env(src, dst):
+        if str(src).endswith(".env"):
+            raise PermissionError(13, "Permission denied")
+        real_rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", fail_on_env)
+    with pytest.raises(ConfigError, match="could not rename"):
+        await mgr.rename("garage", "carport")
+    assert (media / "garage_20261103-111200.jpg").exists()
+    assert not (media / "carport_20261103-111200.jpg").exists()
+    assert (secrets_dir / "garage.env").exists()
+    assert cfg.read_bytes() == before
+    assert ids(registry) == ["office", "garage"]
