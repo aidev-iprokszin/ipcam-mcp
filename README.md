@@ -1,10 +1,12 @@
 # ipcam-mcp
 
+<!-- mcp-name: io.github.aidev-iprokszin/ipcam-mcp -->
+
 An [MCP](https://modelcontextprotocol.io) server that lets Claude Code see through and control
 the IP cameras on your local network (ONVIF + RTSP): snapshots, video clips, pan/tilt and
 change detection, all handled locally.
 
-Any ONVIF camera should work. See [known cameras](docs/cameras/) for what has been tested.
+Any ONVIF camera should work. See [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras) for what has been tested.
 
 ## Tools
 
@@ -75,12 +77,14 @@ predecessor.
 
 ## Setup
 
-1. **Clone and install**:
+1. **Install**: nothing to do if you run it with `uvx ipcam-mcp` (see step 5); uv fetches it
+   from [PyPI](https://pypi.org/project/ipcam-mcp/). To work on the code, or to use the
+   project-scoped `.mcp.json`, clone it instead:
    ```
    git clone https://github.com/aidev-iprokszin/ipcam-mcp.git && cd ipcam-mcp && uv sync
    ```
 2. **Camera account**: create or find the camera's local ONVIF/RTSP account (username and
-   password). This is **not** your cloud login. See [known cameras](docs/cameras/) for where
+   password). This is **not** your cloud login. See [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras) for where
    your brand hides it.
 3. **Secrets file** (outside the repo), e.g. `~/.config/ipcam-mcp/secrets.env`:
    ```
@@ -90,14 +94,18 @@ predecessor.
    ```
    Make it readable only by you: `chmod 600 <file>`. The server warns at startup if other
    users can read it.
-4. **Camera config**: copy `cameras.example.toml` to `~/.config/ipcam-mcp/cameras.toml` (or
+4. **Camera config**: copy [`cameras.example.toml`](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/cameras.example.toml) to `~/.config/ipcam-mcp/cameras.toml` (or
    point `IPCAM_MCP_CONFIG` at another path) and adjust the camera name / variable names. Only
    variable *names* go in this file, never the secrets themselves. Use `type = "onvif"`.
 
    Steps 3 and 4 are optional if you let Claude add cameras: without a config file the server
    starts with no cameras, and `add_camera` (see [Managing cameras](#managing-cameras))
    creates `cameras.toml` and the camera's secrets file for your first camera.
-5. **Use it in Claude Code**: the repo ships a project-scoped `.mcp.json`, so running `claude`
+5. **Use it in Claude Code**: without a clone, register the PyPI package in your user scope:
+   ```
+   claude mcp add ipcam -s user -- uvx ipcam-mcp
+   ```
+   In a clone, the repo ships a project-scoped `.mcp.json`, so running `claude`
    anywhere inside this repo offers the `ipcam` server. Approve it when prompted. If you
    rejected it by mistake, run `claude mcp reset-project-choices` and start `claude` again. Then
    ask Claude e.g. "list my cameras" or "take a snapshot of livingroom".
@@ -124,12 +132,13 @@ config loads.
 
 `ptz = false` means the camera has no pan/tilt tools. Set `stream_high`/`stream_low` if the
 ONVIF lookup fails or picks the wrong stream. Set `invert_pan = true` if `ptz_move left` turns
-the view to the right. Some brands need other values; see [known cameras](docs/cameras/).
+the view to the right. Some brands need other values; see [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras).
 
 ### Other MCP clients
 
 Any client that supports stdio servers (Cursor, VS Code, Codex CLI, …) can run the same
-command: `uv --directory /absolute/path/to/ipcam-mcp run ipcam-mcp`.
+command: `uvx ipcam-mcp`, or `uv --directory /absolute/path/to/ipcam-mcp run ipcam-mcp` for a
+clone.
 
 **Claude Desktop on Windows with the repo in WSL** (untested): add to
 `%APPDATA%\Claude\claude_desktop_config.json` and restart the app:
@@ -211,7 +220,7 @@ controls your cameras.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerability.
+See [SECURITY.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/SECURITY.md) for the threat model and how to report a vulnerability.
 
 - Credentials are read only from your secrets file, never from the repo, and are not put into
   environment variables.
@@ -225,7 +234,7 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
 ## Troubleshooting
 
 - **Auth errors / `401` / ONVIF error on every PTZ call**: use the camera's local account, not a
-  cloud login. See [known cameras](docs/cameras/).
+  cloud login. See [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras).
 - **Snapshots fail but ONVIF works**: set `stream_high`/`stream_low` (see
   [Camera settings](#camera-settings)).
 - **`timed out … (camera unreachable?)`**: the camera is offline or not reachable from this
@@ -297,11 +306,11 @@ A new camera feature (e.g. privacy mode) gets a `Protocol` in `capabilities.py`,
 
 ## Contributing
 
-Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[Code of Conduct](CODE_OF_CONDUCT.md).
+Issues and pull requests are welcome. See [CONTRIBUTING.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/CONTRIBUTING.md) and the
+[Code of Conduct](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/CODE_OF_CONDUCT.md).
 
 This project was built with [Claude Code](https://claude.com/claude-code).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/LICENSE)
