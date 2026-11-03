@@ -257,12 +257,14 @@ See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerab
   existing snapshots, recordings and baselines move from the flat layout into per-camera folders,
   `<media_dir>/<uid>/`. Files of cameras that are no longer configured are kept in folders of
   their own (*removed cameras*: `list_cameras(include_removed=true)`, `delete_camera`).
-  Only files named like a camera (`<name>_YYYYmmdd-HHMMSS.jpg|mp4`, lowercase name) move; other
-  files, such as `IMG_…` photos, stay. A file whose target already exists is left in place with
+  Only files named like a camera's capture (`<name>_YYYYmmdd-HHMMSS.jpg|mp4`, where `<name>`
+  is a configured camera or a valid camera name: `a-z`, `0-9`, `-`, `_`) move; other files, such
+  as `IMG_…` photos, stay. A file whose target already exists is left in place with
   a warning. Once the move has finished, an empty `.flat-layout-migrated` file in `media_dir`
   keeps it from running again; delete it to repeat the migration. `cameras.toml` must be
   writable while cameras still need a uid: a read-only file is not changed, and the server
-  stops with an error.
+  stops with an error. (The server never replaces a read-only `cameras.toml`; management tools
+  then fail with "it is read-only".)
 - Every camera is in a scene, by default its name, so existing snapshots and baselines stay in
   scenes named after their cameras. `camera_compare` now compares only within the camera's
   current scene.

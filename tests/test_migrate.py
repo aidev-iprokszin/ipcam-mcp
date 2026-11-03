@@ -222,3 +222,11 @@ def test_no_marker_after_error(tmp_path, monkeypatch):
     monkeypatch.setattr(migrate.os, "rename", fail)
     assert migrate_flat_layout(m, {"office": U}).error is not None
     assert not (m / migrate.MARKER).exists()
+
+
+def test_configured_name_outside_pattern_still_moves(tmp_path):
+    m = tmp_path / "media"
+    put(m / "Office_20240101-120000.jpg")
+    report = migrate_flat_layout(m, {"Office": U})
+    assert report.moved == {"Office": 1}
+    assert (m / U / "Office_20240101-120000.jpg").exists()

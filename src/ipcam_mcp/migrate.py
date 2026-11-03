@@ -3,7 +3,7 @@
 Old layout: ``<media_dir>/<name>_YYYYmmdd-HHMMSS[-N].jpg|.mp4`` and
 ``<media_dir>/baselines/<name>/``. Each name's files move to ``<media_dir>/<uid>/``: the
 configured camera's uid, or a new uid (a removed camera) for names no longer configured.
-Only valid camera names count (so ``IMG_…`` photos stay). Nothing is overwritten or deleted;
+Only configured or valid camera names count (so ``IMG_…`` photos stay). Nothing is overwritten or deleted;
 anything else in ``media_dir`` is left alone. After a run without error, ``MARKER`` in
 ``media_dir`` stops later runs; delete it to migrate again.
 """
@@ -40,16 +40,19 @@ class _Group:
     baselines: Path | None = None
 
 
-def _groups(media_dir: Path) -> dict[str, _Group]:
+def _groups(media_dir: Path, configured: Mapping[str, str]) -> dict[str, _Group]:
+    def ours(name: str) -> bool:  # a configured camera, or one that add_camera could name
+        return name in configured or bool(_NAME_RE.fullmatch(name))
+
     groups: dict[str, _Group] = {}
     for p in media_dir.iterdir():
         m = _FLAT_RE.match(p.name)
-        if m and _NAME_RE.fullmatch(m["name"]) and p.is_file():
+        if m and ours(m["name"]) and p.is_file():
             groups.setdefault(m["name"], _Group()).captures.append(p)
     legacy = media_dir / "baselines"
     if legacy.is_dir():
         for d in legacy.iterdir():
-            if d.is_dir() and not d.is_symlink() and _NAME_RE.fullmatch(d.name):
+            if d.is_dir() and not d.is_symlink() and ours(d.name):
                 groups.setdefault(d.name, _Group()).baselines = d
     return groups
 
@@ -70,7 +73,7 @@ def migrate_flat_layout(
     if (media_dir / MARKER).exists():
         return report
     try:
-        groups = _groups(media_dir)
+        groups = _groups(media_dir, configured)
     except OSError:
         return report  # no media_dir yet
     if not groups:

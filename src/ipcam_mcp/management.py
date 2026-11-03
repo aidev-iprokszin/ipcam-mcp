@@ -128,7 +128,13 @@ def sync_scenes(path: Path, config: AppConfig) -> bool:
         if meta is None or meta.current_scene == dev.scene:
             continue
         if meta.name != name and "scene" not in sections.get(name, {}):
-            config_writer.set_key(path, name, "scene", meta.current_scene)
+            try:
+                config_writer.set_key(path, name, "scene", meta.current_scene)
+            except ConfigError as e:  # e.g. read-only: keep the history as it is
+                log.warning("camera '%s' was renamed from '%s', but its scene could not be kept "
+                            "(%s); add scene = \"%s\" to its section",
+                            name, meta.name, e, meta.current_scene)  # fmt: skip
+                continue
             log.info("camera '%s' was renamed from '%s'; it keeps scene '%s'",
                      name, meta.name, meta.current_scene)  # fmt: skip
             changed = True
