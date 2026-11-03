@@ -1,0 +1,32 @@
+name: Camera report
+description: Tell us whether a camera model works with ipcam-mcp.
+labels: [documentation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports help others with the same camera, and good ones become a page under
+        `docs/cameras/`. **Never paste IP addresses, usernames or passwords.**
+  - type: input
+    id: model
+    attributes:
+      label: Camera brand, model and firmware
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Does it work?
+      options: ["Yes, fully", "Partly", "No"]
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings needed
+      description: Config type and any settings (onvif_port, rtsp_port, stream_high/low, invert_pan, ptz).
+      render: toml
+  - type: textarea
+    id: notes
+    attributes:
+      label: What works, what doesn't, and how you enabled ONVIF / the camera account

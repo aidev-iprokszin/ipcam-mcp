@@ -1,0 +1,43 @@
+name: Linked issue
+
+# Every pull request must close an issue ("Closes #123" in the description).
+# Uses pull_request (not pull_request_target): read-only token, safe for forks.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  linked-issue:
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check that the PR closes an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          query='query($owner: String!, $repo: String!, $pr: Int!) {
+            repository(owner: $owner, name: $repo) {
+              pullRequest(number: $pr) { closingIssuesReferences(first: 10) { totalCount } }
+            }
+          }'
+          # GitHub links issues asynchronously after the description changes: retry briefly.
+          for attempt in 1 2 3 4 5 6; do
+            count=$(gh api graphql -f query="$query" -f owner="$OWNER" -f repo="$REPO" -F pr="$PR" \
+              --jq '.data.repository.pullRequest.closingIssuesReferences.totalCount')
+            if [ "$count" -gt 0 ]; then
+              echo "PR closes $count issue(s)."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::This pull request does not close an issue. Open an issue first (or find the existing one) and add 'Closes #<number>' to the PR description."
+          exit 1

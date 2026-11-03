@@ -1,0 +1,15 @@
+# Categories for GitHub's auto-generated release notes (by PR label).
+changelog:
+  exclude:
+    labels: [skip-changelog]
+  categories:
+    - title: ✨ Features
+      labels: [enhancement]
+    - title: 🐛 Bug fixes
+      labels: [bug]
+    - title: 📚 Documentation
+      labels: [documentation]
+    - title: 📦 Dependencies
+      labels: [dependencies]
+    - title: Other changes
+      labels: ["*"]
