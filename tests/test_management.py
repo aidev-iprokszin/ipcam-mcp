@@ -1376,3 +1376,63 @@ def test_hand_rename_with_read_only_config_still_loads(env, caplog):
     assert "desk" in config.devices
     assert 'scene = "office"' in caplog.text
     assert [p.scene for p in read_meta(folder).scenes] == ["office"]
+
+
+async def test_rename_keeps_managed_secrets_shared_with_another_camera(env):
+    cfg, secrets_dir, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    managed = secrets_dir / "garage.env"
+    with cfg.open("a") as f:
+        f.write(
+            "\n[cameras.twin]\n"
+            f'uid = "{uid_for("twin")}"\n'
+            'type = "tapo_onvif"\n'
+            f'secrets_file = "{managed}"\n'
+            'host_var = "HOST"\nuser_var = "USER"\npassword_var = "PASSWORD"\n'
+        )
+    await mgr.reload()
+
+    result = await mgr.rename("garage", "carport")
+
+    assert result == (
+        f"renamed 'garage' to 'carport'; its secrets file {managed} is shared with 'twin' "
+        "and keeps its name"
+    )
+    assert managed.exists() and not (secrets_dir / "carport.env").exists()
+    assert tomllib.loads(cfg.read_text())["cameras"]["carport"]["secrets_file"] == str(managed)
+    assert sorted(ids(registry)) == ["carport", "office", "twin"]
+
+
+def _add_twin(cfg: Path, secrets_file: Path) -> None:
+    with cfg.open("a") as f:
+        f.write(
+            "\n[cameras.twin]\n"
+            f'uid = "{uid_for("twin")}"\n'
+            'type = "tapo_onvif"\n'
+            f'secrets_file = "{secrets_file}"\n'
+            'host_var = "HOST"\nuser_var = "USER"\npassword_var = "PASSWORD"\n'
+        )
+
+
+async def test_add_with_form_refuses_secrets_file_in_use(env):
+    cfg, secrets_dir, _ = env
+    mgr, _, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    _add_twin(cfg, secrets_dir / "garage.env")
+    await mgr.reload()
+    await mgr.rename("garage", "carport")
+    with pytest.raises(ValueError, match="already used by camera 'carport'; pick another name"):
+        await mgr.add("garage", "10.0.0.6", prompt_with(Credentials(USER, PASSWORD)))
+
+
+async def test_rename_does_not_claim_a_file_it_does_not_use(env):
+    """office uses the shared secrets.env; twin alone uses <secrets_dir>/office.env."""
+    cfg, secrets_dir, _ = env
+    mgr, _, _ = make_manager(cfg)
+    other = secrets_dir / "office.env"
+    write_env(other, "10.0.0.7", USER, PASSWORD)
+    _add_twin(cfg, other)
+    await mgr.reload()
+    assert await mgr.rename("office", "front") == "renamed 'office' to 'front'"
+    assert other.exists()
