@@ -13,6 +13,8 @@ media_dir = "~/.local/share/ipcam-mcp/media"
 # hand-made secrets files elsewhere (like the secrets_file below).
 # secrets_dir = "~/.config/ipcam-mcp/secrets"
 
+# Each camera gets a permanent `uid = "..."` line, filled in by the server on first start.
+# It names the camera's media folder; don't change or copy it.
 [cameras.livingroom]
 type = "onvif"
 secrets_file = "~/.config/ipcam-mcp/secrets.env"

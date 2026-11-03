@@ -9,6 +9,7 @@ from ipcam_mcp.capabilities import Preset
 from ipcam_mcp.config import DeviceConfig
 from ipcam_mcp.errors import DeviceError
 from ipcam_mcp.media import media_path
+from ipcam_mcp.store import ensure_folder
 
 
 class FakeCamPTZ:
@@ -23,14 +24,14 @@ class FakeCamPTZ:
 
     async def snapshot(self, quality):
         self.snapshots += 1
-        p = media_path(self.media_dir, self.cfg.id, "jpg")
+        p = media_path(ensure_folder(self.media_dir, self.cfg.uid, self.cfg.id), self.cfg.id, "jpg")
         Image.new("RGB", (64, 48), (200, 30, 30)).save(p, "JPEG")
         return p
 
     async def record(self, seconds, quality):
         if not 1 <= seconds <= 60:
             raise ValueError(f"seconds must be between 1 and 60, got {seconds}")
-        p = self.media_dir / "clip.mp4"
+        p = ensure_folder(self.media_dir, self.cfg.uid, self.cfg.id) / "clip.mp4"
         p.write_bytes(b"x" * 1234)
         return p
 
@@ -70,3 +71,10 @@ class FakeCamPTZ:
 
     async def position(self):
         return (0.1, -0.2)
+
+
+def uid_for(name: str) -> str:
+    """A deterministic, valid camera uid for test configs."""
+    import hashlib
+
+    return hashlib.sha1(name.encode()).hexdigest()[:8]

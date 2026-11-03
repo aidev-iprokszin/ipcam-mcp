@@ -1,4 +1,4 @@
-"""Named reference snapshots for camera_compare, stored under <media_dir>/baselines/<id>/."""
+"""Named reference snapshots for camera_compare, stored in <camera folder>/baselines/."""
 
 import contextlib
 import json
@@ -11,7 +11,6 @@ from datetime import datetime
 from pathlib import Path
 
 from ipcam_mcp.management import ID_PATTERN
-from ipcam_mcp.media import baselines_dir
 
 _NAME_RE = re.compile(ID_PATTERN)
 
@@ -25,14 +24,17 @@ class Baseline:
     position: tuple[float, float] | None
 
 
-def latest_snapshot(media_dir: Path, cam_id: str) -> Path | None:
-    """Newest ``<cam_id>_YYYYmmdd-HHMMSS[-N].jpg`` (exact id match, so 'office' != 'office_test')."""
-    pattern = re.compile(rf"^{re.escape(cam_id)}_(\d{{8}}-\d{{6}})(?:-(\d+))?\.jpg$")
+_CAPTURE_RE = re.compile(r"^.+_(\d{8}-\d{6})(?:-(\d+))?\.jpg$")
+
+
+def latest_snapshot(folder: Path) -> Path | None:
+    """Newest ``<name>_YYYYmmdd-HHMMSS[-N].jpg`` in the camera's folder. The name prefix is
+    ignored: it is the camera's name at capture time, which renames change."""
     try:
         found = [
             (m, p)
-            for p in media_dir.iterdir()
-            if (m := pattern.match(p.name)) and p.stat().st_size > 0  # skip reservations
+            for p in folder.iterdir()
+            if (m := _CAPTURE_RE.match(p.name)) and p.stat().st_size > 0  # skip reservations
         ]
     except OSError:
         return None
@@ -50,8 +52,8 @@ def check_name(name: str) -> None:
         )
 
 
-def _dir(media_dir: Path, cam_id: str) -> Path:
-    return baselines_dir(media_dir, cam_id)
+def _dir(folder: Path) -> Path:
+    return folder / "baselines"
 
 
 def _replace_atomic(dest: Path, write) -> None:
@@ -67,15 +69,14 @@ def _replace_atomic(dest: Path, write) -> None:
 
 
 def save_baseline(
-    media_dir: Path,
-    cam_id: str,
+    folder: Path,
     name: str,
     snapshot: Path,
     quality: str,
     position: tuple[float, float] | None,
 ) -> Baseline:
     check_name(name)
-    d = _dir(media_dir, cam_id)
+    d = _dir(folder)
     d.mkdir(parents=True, exist_ok=True)
     taken = datetime.now().astimezone()
     meta = {
@@ -89,19 +90,19 @@ def save_baseline(
     return Baseline(name, jpg, datetime.fromisoformat(meta["taken"]), quality, position)
 
 
-def list_baselines(media_dir: Path, cam_id: str) -> list[str]:
-    d = _dir(media_dir, cam_id)
+def list_baselines(folder: Path) -> list[str]:
+    d = _dir(folder)
     if not d.is_dir():
         return []
     return sorted(p.stem for p in d.glob("*.json") if (d / f"{p.stem}.jpg").is_file())
 
 
-def load_baseline(media_dir: Path, cam_id: str, name: str) -> Baseline:
+def load_baseline(folder: Path, name: str) -> Baseline:
     check_name(name)
-    d = _dir(media_dir, cam_id)
+    d = _dir(folder)
     jpg, meta_path = d / f"{name}.jpg", d / f"{name}.json"
     if not (jpg.is_file() and meta_path.is_file()):
-        available = ", ".join(list_baselines(media_dir, cam_id)) or "none"
+        available = ", ".join(list_baselines(folder)) or "none"
         raise ValueError(f"baseline '{name}' not found; available: {available}")
     meta = json.loads(meta_path.read_text())
     pos = meta.get("position")

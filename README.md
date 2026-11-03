@@ -21,14 +21,24 @@ Any ONVIF camera should work. See [known cameras](docs/cameras/) for what has be
 | `ptz_save_preset(camera, name, overwrite=False)` | Saves the current position as a preset; refuses an existing name unless `overwrite=true` |
 | `ptz_remove_preset(camera, preset)` | Deletes a preset by name or token (cannot be undone) |
 
-`camera` is a camera id from your `cameras.toml`. `quality="high"` uses the camera's main
-stream (1080p), `"low"` the sub stream (smaller, quicker). Media is saved to
-`~/.local/share/ipcam-mcp/media/` as `<camera>_<YYYYmmdd-HHMMSS>.jpg|.mp4`.
+`camera` is a camera's name: its section name in `cameras.toml`. `quality="high"` uses the
+camera's main stream (1080p), `"low"` the sub stream (smaller, quicker). Media is saved to the
+camera's own folder, `<media_dir>/<uid>/<camera>_<YYYYmmdd-HHMMSS>.jpg|.mp4` (`media_dir`
+defaults to `~/.local/share/ipcam-mcp/media`).
 
 **Compare and crop.** `camera_compare` lists the grid cells that changed (the same names as
 `region`) and a box around them. Pass a changed cell as `region` to `camera_snapshot`, ideally
 with `from_path` set to the snapshot you just looked at, to see it closer. Baselines live in
-`<media_dir>/baselines/<camera>/` as a JPEG plus a small JSON file.
+`<media_dir>/<uid>/baselines/` as a JPEG plus a small JSON file.
+
+**Camera uids.** Every camera has a permanent `uid` (8 characters, `a-z0-9`) in its
+`cameras.toml` section. The server fills it in when it is missing, so you never write one
+yourself; don't change or copy it. The uid names the camera's media folder, which also holds a
+`camera.json` with the camera's current name. Because of it, a renamed camera keeps its
+snapshots and baselines, and a new camera that reuses an old name starts with an empty history.
+When you upgrade from 0.2, the first start moves existing snapshots, recordings and baselines
+from the old flat layout into these folders; files of cameras that are no longer configured get
+a folder of their own and are kept.
 
 ## Prerequisites
 
@@ -59,7 +69,7 @@ with `from_path` set to the snapshot you just looked at, to see it closer. Basel
    Make it readable only by you: `chmod 600 <file>`. The server warns at startup if other
    users can read it.
 4. **Camera config**: copy `cameras.example.toml` to `~/.config/ipcam-mcp/cameras.toml` (or
-   point `IPCAM_MCP_CONFIG` at another path) and adjust the camera id / variable names. Only
+   point `IPCAM_MCP_CONFIG` at another path) and adjust the camera name / variable names. Only
    variable *names* go in this file, never the secrets themselves. Use `type = "onvif"`.
 
    Steps 3 and 4 are optional if you let Claude add cameras: without a config file the server
@@ -137,8 +147,8 @@ agent picked up elsewhere.
 
 | Tool | What it does |
 |---|---|
-| `add_camera(id, host, credentials_via="form", onvif_port=None)` | Verifies the login over ONVIF (tries port 80, then 2020, unless you give `onvif_port`), detects pan/tilt, then adds the camera. `id` is lowercase letters, digits, `-`, `_` (max 32) |
-| `rename_camera(old, new)` | Changes a camera's id; its baselines, snapshots and recordings move to the new id (so `camera_compare` keeps working), and its secrets file is renamed too if the tool created it. Refused if media of an earlier camera with the new id are still in `media_dir` |
+| `add_camera(name, host, credentials_via="form", onvif_port=None)` | Verifies the login over ONVIF (tries port 80, then 2020, unless you give `onvif_port`), detects pan/tilt, then adds the camera with a new uid. `name` is lowercase letters, digits, `-`, `_` (max 32) |
+| `rename_camera(old, new)` | Changes a camera's name; its uid, baselines, snapshots and recordings stay with it (no files move), and its secrets file is renamed too if the tool created it |
 | `remove_camera(id)` | Removes the camera from the config; never deletes snapshots or recordings |
 | `reload_cameras()` | Always available. Re-reads `cameras.toml` after a manual edit and lists the cameras |
 
@@ -155,13 +165,13 @@ camera's IP from the camera's app or your router.
   MCP protocol 2026-07-28 cannot show the form mid-call, and neither can some phone (Remote
   Control) views; there `add_camera` always uses the secrets-file route and says so in its
   result.
-- **File** (`credentials_via="file"`): `add_camera` creates `<secrets_dir>/<id>.env` (mode
+- **File** (`credentials_via="file"`): `add_camera` creates `<secrets_dir>/<name>.env` (mode
   `0600`, default `secrets_dir` is `~/.config/ipcam-mcp/secrets`) with `HOST=`, empty `USER=` and
   `PASSWORD=`. Fill in USER and PASSWORD yourself, then ask Claude to call `add_camera` again
-  with the same id and host, **keeping `credentials_via="file"`**. Calling it with the default
+  with the same name and host, **keeping `credentials_via="file"`**. Calling it with the default
   `form` would ask for the credentials again instead of reading the file.
 
-Each camera added this way has its own `<id>.env`, and files at `<secrets_dir>/<id>.env` are
+Each camera added this way has its own `<name>.env`, and files at `<secrets_dir>/<name>.env` are
 treated as managed: renamed and deleted along with the camera. Keep hand-made files elsewhere;
 those, such as a shared `secrets.env`, are never renamed or deleted. Secrets files are read literally: `${VAR}` in a
 value is not expanded.

@@ -1,19 +1,28 @@
 import asyncio
-import os
+import re
 import stat
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
 import pytest
-from conftest import FakeCamPTZ
+from conftest import FakeCamPTZ, uid_for
 from dotenv import dotenv_values
 
+from ipcam_mcp import store
 from ipcam_mcp.adapters.onvif import DeviceInfo
 from ipcam_mcp.baselines import latest_snapshot
 from ipcam_mcp.config import load_config
 from ipcam_mcp.errors import ConfigError, DeviceError
-from ipcam_mcp.management import Credentials, Manager, validate_host, validate_id
+from ipcam_mcp.management import (
+    Credentials,
+    Manager,
+    prepare_config,
+    validate_host,
+    validate_id,
+)
 from ipcam_mcp.registry import Registry
+from ipcam_mcp.store import UID_PATTERN, CameraMeta, read_meta, write_meta
 
 USER = "camuser"
 PASSWORD = "s3cr3t-pw"
@@ -60,6 +69,7 @@ def env(tmp_path):
         "\n"
         "# the office camera\n"
         "[cameras.office]\n"
+        f'uid = "{uid_for("office")}"\n'
         'type = "tapo_onvif"\n'
         f'secrets_file = "{shared}"\n'
         'host_var = "OFFICE_HOST"\n'
@@ -162,7 +172,7 @@ async def test_add_file_mode_two_step(env):
     first = await mgr.add("garage", "10.0.0.5", None)
     assert first == (
         f"Fill in USER and PASSWORD in {env_file}, then call add_camera again "
-        "with id 'garage', the same host and credentials_via=\"file\"."
+        "with name 'garage', the same host and credentials_via=\"file\"."
     )
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
     assert dotenv_values(env_file, interpolate=False) == {
@@ -421,85 +431,6 @@ async def test_rename_reload_failure_rolls_back(env):
     assert ids(registry) == ["office", "garage"]
 
 
-def _office_media(cfg: Path) -> Path:
-    media = cfg.parent / "media"
-    (media / "baselines" / "office").mkdir(parents=True)
-    (media / "baselines" / "office" / "door.jpg").write_bytes(b"jpg")
-    (media / "baselines" / "office" / "door.json").write_text("{}")
-    (media / "office_20261103-111200.jpg").write_bytes(b"jpg")
-    return media
-
-
-async def test_rename_moves_baselines_and_snapshots(env):
-    cfg, _, _ = env
-    media = _office_media(cfg)
-    mgr, registry, _ = make_manager(cfg)
-
-    await mgr.rename("office", "front")
-
-    assert (media / "baselines" / "front" / "door.jpg").exists()
-    assert not (media / "baselines" / "office").exists()
-    assert latest_snapshot(media, "front") == media / "front_20261103-111200.jpg"
-    assert latest_snapshot(media, "office") is None
-    assert ids(registry) == ["front"]
-
-
-async def test_rename_refuses_when_new_id_has_media(env):
-    cfg, _, _ = env
-    media = _office_media(cfg)
-    (media / "front_20250101-000000.jpg").write_bytes(b"old")
-    before = cfg.read_bytes()
-    mgr, registry, _ = make_manager(cfg)
-
-    with pytest.raises(ValueError, match="'front' already exist"):
-        await mgr.rename("office", "front")
-    assert cfg.read_bytes() == before
-    assert (media / "office_20261103-111200.jpg").exists()
-    assert ids(registry) == ["office"]
-
-
-async def test_rename_reload_failure_moves_media_back(env):
-    cfg, _, _ = env
-    media = _office_media(cfg)
-    calls = 0
-
-    def load(path: Path):
-        nonlocal calls
-        calls += 1
-        if calls == 2:  # rename: 1, then the reload (2)
-            raise ConfigError("boom")
-        return load_config(path)
-
-    mgr, _, _ = make_manager(cfg, load=load)
-    with pytest.raises(ConfigError, match="boom"):
-        await mgr.rename("office", "front")
-    assert (media / "baselines" / "office" / "door.jpg").exists()
-    assert (media / "office_20261103-111200.jpg").exists()
-    assert not (media / "baselines" / "front").exists()
-
-
-async def test_rename_waits_for_running_camera_op(env):
-    cfg, _, _ = env
-    media = _office_media(cfg)
-    mgr, registry, _ = make_manager(cfg)
-    order: list[str] = []
-
-    async def capture():
-        async with registry.lock("office"):
-            await asyncio.sleep(0.05)
-            (media / "office_20261103-111300.jpg").write_bytes(b"jpg")
-            order.append("capture done")
-
-    task = asyncio.create_task(capture())
-    await asyncio.sleep(0)  # let the capture take the lock
-    await mgr.rename("office", "front")
-    order.append("renamed")
-    await task
-
-    assert order == ["capture done", "renamed"]
-    assert latest_snapshot(media, "front") == media / "front_20261103-111300.jpg"
-
-
 async def test_rename_shared_secrets_untouched(env):
     cfg, _, shared = env
     mgr, registry, _ = make_manager(cfg)
@@ -534,6 +465,7 @@ async def test_remove_managed_and_shared(env):
     with cfg.open("a") as f:
         f.write(
             "\n[cameras.twin]\n"
+            f'uid = "{uid_for("twin")}"\n'
             'type = "tapo_onvif"\n'
             f'secrets_file = "{managed}"\n'
             'host_var = "HOST"\nuser_var = "USER"\npassword_var = "PASSWORD"\n'
@@ -592,7 +524,12 @@ async def test_reload_returns_list(env):
     text = cfg.read_text().replace("[cameras.office]", "[cameras.desk]")
     cfg.write_text(text)
     assert await mgr.reload() == [
-        {"id": "desk", "type": "tapo_onvif", "capabilities": ["camera", "ptz"]}
+        {
+            "id": "desk",
+            "uid": uid_for("office"),
+            "type": "tapo_onvif",
+            "capabilities": ["camera", "ptz"],
+        }
     ]
 
 
@@ -662,26 +599,80 @@ async def test_rename_remove_with_missing_config_not_found(fresh, op):
     assert not cfg.exists()
 
 
-async def test_rename_secrets_move_failure_moves_media_back(env, monkeypatch):
-    cfg, secrets_dir, _ = env
-    mgr, registry, _ = make_manager(cfg)
+def test_prepare_config_assigns_and_loads(env):
+    cfg, _, _ = env
+    cfg.write_text(cfg.read_text().replace(f'uid = "{uid_for("office")}"\n', ""))
+    loaded = prepare_config(cfg)
+    uid = loaded.devices["office"].uid
+    assert re.fullmatch(UID_PATTERN, uid)
+    assert tomllib.loads(cfg.read_text())["cameras"]["office"]["uid"] == uid
+
+
+def test_prepare_config_missing_file_is_empty(tmp_path):
+    assert prepare_config(tmp_path / "nope.toml").devices == {}
+
+
+# --- uids and per-camera folders ---
+
+
+async def test_add_writes_uid_and_camera_json(env):
+    cfg, _, _ = env
+    mgr, _, _ = make_manager(cfg)
     await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    uid = tomllib.loads(cfg.read_text())["cameras"]["garage"]["uid"]
+    assert re.fullmatch(UID_PATTERN, uid)
+    assert read_meta(cfg.parent / "media" / uid).name == "garage"
+
+
+async def test_add_uid_avoids_existing_folders(env, monkeypatch):
+    cfg, _, _ = env
+    (cfg.parent / "media" / "aaaaaaaa").mkdir(parents=True)
+    chars = iter("aaaaaaaabbbbbbbb")
+    monkeypatch.setattr(store.secrets, "choice", lambda _alphabet: next(chars))
+    mgr, _, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    assert tomllib.loads(cfg.read_text())["cameras"]["garage"]["uid"] == "bbbbbbbb"
+
+
+async def test_rename_moves_no_files_and_updates_meta(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    (folder / "office_20261103-111200.jpg").write_bytes(b"jpg")
+
+    result = await mgr.rename("office", "front")
+
+    assert result == "renamed 'office' to 'front'"
+    assert read_meta(folder).name == "front"  # before registry.folder() could rewrite it
+    assert registry.folder("front") == folder
+    assert latest_snapshot(folder) == folder / "office_20261103-111200.jpg"
+    assert sorted(p.name for p in folder.parent.iterdir()) == [uid_for("office")]
+
+
+async def test_rename_to_name_of_removed_camera_notes_it(env):
+    cfg, _, _ = env
     media = cfg.parent / "media"
-    media.mkdir(exist_ok=True)
-    (media / "garage_20261103-111200.jpg").write_bytes(b"jpg")
-    before = cfg.read_bytes()
-    real_rename = os.rename
+    old = media / "zzzzzzzz"
+    write_meta(old, CameraMeta("zzzzzzzz", "front", datetime(2025, 1, 1).astimezone()))
+    (old / "front_20250101-000000.jpg").write_bytes(b"old")
+    mgr, registry, _ = make_manager(cfg)
 
-    def fail_on_env(src, dst):
-        if str(src).endswith(".env"):
-            raise PermissionError(13, "Permission denied")
-        real_rename(src, dst)
+    result = await mgr.rename("office", "front")
 
-    monkeypatch.setattr(os, "rename", fail_on_env)
-    with pytest.raises(ConfigError, match="could not rename"):
-        await mgr.rename("garage", "carport")
-    assert (media / "garage_20261103-111200.jpg").exists()
-    assert not (media / "carport_20261103-111200.jpg").exists()
-    assert (secrets_dir / "garage.env").exists()
-    assert cfg.read_bytes() == before
-    assert ids(registry) == ["office", "garage"]
+    assert "removed camera named 'front'" in result
+    assert read_meta(old).name == "front" and (old / "front_20250101-000000.jpg").exists()
+    assert registry.folder("front") == media / uid_for("office")
+
+
+def test_prepare_config_warns_about_detached_history(env, caplog):
+    """A section that lost its uid (editor save, old backup) gets a new one; the earlier
+    camera's folder with the same name is pointed out instead of silently orphaned."""
+    cfg, _, _ = env
+    media = cfg.parent / "media"
+    write_meta(
+        media / "zzzzzzzz", CameraMeta("zzzzzzzz", "office", datetime(2025, 1, 1).astimezone())
+    )
+    cfg.write_text(cfg.read_text().replace(f'uid = "{uid_for("office")}"\n', ""))
+    with caplog.at_level("WARNING", logger="ipcam_mcp"):
+        prepare_config(cfg)
+    assert "zzzzzzzz" in caplog.text and 'uid = "zzzzzzzz"' in caplog.text

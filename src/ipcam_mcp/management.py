@@ -6,6 +6,7 @@ appear in returned strings or raised messages.
 """
 
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import os
@@ -18,10 +19,10 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-from ipcam_mcp import config_writer, media
+from ipcam_mcp import config_writer, store
 from ipcam_mcp.adapters import onvif
 from ipcam_mcp.adapters.onvif import DeviceInfo
-from ipcam_mcp.config import AppConfig, load_config
+from ipcam_mcp.config import AppConfig, load_config, media_dir_of
 from ipcam_mcp.errors import ConfigError
 from ipcam_mcp.registry import Registry
 
@@ -63,8 +64,23 @@ def validate_host(host: str) -> None:
         raise ValueError(message)
 
 
-def _load_or_empty(path: Path) -> AppConfig:
-    """A missing cameras.toml is an empty config: add_camera creates it."""
+def prepare_config(path: Path) -> AppConfig:
+    """Give cameras without a uid one (written to ``path``), then load the config.
+
+    A missing cameras.toml is an empty config: add_camera creates it.
+    """
+    media_dir = media_dir_of(path)
+    reserved = store.folder_names(media_dir)
+    for name, uid in config_writer.ensure_uids(path, reserved).items():
+        log.info("camera '%s' got uid %s", name, uid)
+        for old in sorted(reserved):
+            meta = store.read_meta(media_dir / old) if store.is_uid(old) else None
+            if meta is not None and meta.name == name:
+                log.warning(
+                    "camera '%s' got a new uid, but %s holds media of an earlier camera named "
+                    "'%s'. If it is the same camera, set uid = \"%s\" in its section of %s",
+                    name, media_dir / old, name, old, path,
+                )  # fmt: skip
     return load_config(path, missing_ok=True)
 
 
@@ -74,7 +90,7 @@ class Manager:
         config_path: Path,
         registry: Registry,
         probe: Prober = onvif.probe,
-        load: Callable[[Path], AppConfig] = _load_or_empty,
+        load: Callable[[Path], AppConfig] = prepare_config,
     ):
         self._config_path = config_path
         self._registry = registry
@@ -106,7 +122,7 @@ class Manager:
                     ]
                     if users:
                         raise ValueError(
-                            f"{env_path} is already used by camera '{users[0]}'; pick another id"
+                            f"{env_path} is already used by camera '{users[0]}'; pick another name"
                         )
                 creds = self._file_credentials(cam_id, host, env_path)
                 if isinstance(creds, str):
@@ -133,7 +149,9 @@ class Manager:
                     env_path, {"HOST": host, "USER": creds.user, "PASSWORD": creds.password}
                 )
                 undo.append(lambda: env_path.unlink(missing_ok=True))
+            taken = store.folder_names(config.media_dir) | {d.uid for d in config.devices.values()}
             section: dict[str, Any] = {
+                "uid": store.new_uid(taken),
                 "type": "onvif",
                 "secrets_file": str(env_path),
                 "host_var": "HOST",
@@ -146,6 +164,7 @@ class Manager:
             await self._mutate(
                 lambda: config_writer.add_section(self._config_path, cam_id, section), undo
             )
+            store.ensure_folder(config.media_dir, section["uid"], cam_id)
             caps = next(c["capabilities"] for c in self._registry.list() if c["id"] == cam_id)
             return (
                 f"added '{cam_id}' ({info.manufacturer} {info.model}); "
@@ -167,27 +186,30 @@ class Manager:
             if managed and new_path.exists():
                 raise ConfigError(f"secrets file already exists: {new_path}")
 
-            # Wait for a running snapshot/recording of the camera: its file is moved next.
-            async with self._registry.lock(old):
-                undo = [media.rename_camera_media(config.media_dir, old, new)]
-                updates: dict[str, str] | None = None
-                if managed:
-                    try:
-                        os.rename(old_path, new_path)
-                    except OSError as exc:
-                        undo[0]()
-                        raise ConfigError(
-                            f"could not rename {old_path} to {new_path}: {exc.strerror or exc}"
-                        ) from exc
-                    undo.append(lambda: os.rename(new_path, old_path))
-                    updates = {"secrets_file": str(new_path)}
+            undo: list[Callable[[], None]] = []
+            updates: dict[str, str] | None = None
+            if managed:
+                try:
+                    os.rename(old_path, new_path)
+                except OSError as exc:
+                    raise ConfigError(
+                        f"could not rename {old_path} to {new_path}: {exc.strerror or exc}"
+                    ) from exc
+                undo.append(lambda: os.rename(new_path, old_path))
+                updates = {"secrets_file": str(new_path)}
 
-                await self._mutate(
-                    lambda: config_writer.rename_section(self._config_path, old, new, updates),
-                    undo,
-                    close_retired=False,  # needs the camera lock held here
+            await self._mutate(
+                lambda: config_writer.rename_section(self._config_path, old, new, updates), undo
+            )
+            # Media stay in the camera's uid folder; only its recorded name changes.
+            uid = config.devices[old].uid
+            if (config.media_dir / uid).is_dir():
+                store.ensure_folder(config.media_dir, uid, new)
+            if self._removed_named(config, new):
+                return (
+                    f"renamed '{old}' to '{new}'; an earlier, removed camera named '{new}' "
+                    "keeps its files separately"
                 )
-            await self._registry.close_retired()
             return f"renamed '{old}' to '{new}'"
 
     async def remove(self, cam_id: str) -> str:
@@ -222,7 +244,7 @@ class Manager:
         """Credentials from ``<id>.env``, or the instruction to fill it in."""
         instruction = (
             f"Fill in USER and PASSWORD in {env_path}, then call add_camera again "
-            f"with id '{cam_id}', the same host and credentials_via=\"file\"."
+            f"with name '{cam_id}', the same host and credentials_via=\"file\"."
         )
         if not env_path.exists():
             config_writer.write_secrets_file(env_path, {"HOST": host, "USER": "", "PASSWORD": ""})
@@ -245,6 +267,17 @@ class Manager:
         except FileNotFoundError:
             return {}
         return tomllib.loads(text).get("cameras", {})
+
+    @staticmethod
+    def _removed_named(config: AppConfig, name: str) -> bool:
+        """Whether a removed camera (uid folder not in the config) was called ``name``."""
+        configured = {d.uid for d in config.devices.values()}
+        for uid in store.folder_names(config.media_dir) - configured:
+            with contextlib.suppress(ValueError):
+                meta = store.read_meta(store.camera_dir(config.media_dir, uid))
+                if meta is not None and meta.name == name:
+                    return True
+        return False
 
     @staticmethod
     def _is_managed(spec: dict[str, Any], managed_path: Path) -> bool:

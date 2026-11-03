@@ -6,10 +6,11 @@ from pathlib import Path
 import pytest
 from dotenv import dotenv_values
 
-from ipcam_mcp import config_writer
+from ipcam_mcp import config_writer, store
 from ipcam_mcp.config_writer import (
     add_section,
     atomic_write,
+    ensure_uids,
     remove_section,
     rename_section,
     write_secrets_file,
@@ -230,3 +231,64 @@ def test_atomic_write_fsyncs_before_replace(tmp_path, monkeypatch):
     monkeypatch.setattr(config_writer.os, "replace", replace)
     atomic_write(tmp_path / "f.toml", "data")
     assert events[:2] == ["fsync", "replace"]
+
+
+# --- ensure_uids ---
+
+
+def _uids(p: Path) -> dict:
+    return {name: spec.get("uid") for name, spec in _cams(p).items()}
+
+
+def test_ensure_uids_fills_only_missing_and_keeps_comments(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('# top\n[cameras.a]\nuid = "aaaaaaaa"\n\n# about b\n[cameras.b]\ntype = "t"\n')
+    assigned = ensure_uids(p, set())
+    assert list(assigned) == ["b"]
+    assert _uids(p) == {"a": "aaaaaaaa", "b": assigned["b"]}
+    assert "# about b" in p.read_text() and "# top" in p.read_text()
+
+
+def test_ensure_uids_avoids_reserved_and_existing(tmp_path, monkeypatch):
+    chars = iter("ccccccccaaaaaaaadddddddd")
+    monkeypatch.setattr(store.secrets, "choice", lambda _alphabet: next(chars))
+    p = tmp_path / "c.toml"
+    p.write_text('[cameras.a]\nuid = "aaaaaaaa"\n[cameras.b]\ntype = "t"\n')
+    assert ensure_uids(p, {"cccccccc"}) == {"b": "dddddddd"}
+
+
+def test_ensure_uids_noop_does_not_write(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('[cameras.a]\nuid = "aaaaaaaa"\n')
+    before = p.stat().st_mtime_ns
+    assert ensure_uids(p, set()) == {}
+    assert ensure_uids(tmp_path / "missing.toml", set()) == {}
+    assert p.stat().st_mtime_ns == before
+    assert not (tmp_path / "missing.toml").exists()
+
+
+def test_ensure_uids_unwritable(tmp_path, monkeypatch):
+    p = tmp_path / "c.toml"
+    p.write_text('[cameras.b]\ntype = "t"\n')
+    before = p.read_bytes()
+
+    def fail(path, data):
+        raise ConfigError(f"could not write {path}: Permission denied")
+
+    monkeypatch.setattr(config_writer, "atomic_write", fail)
+    with pytest.raises(ConfigError, match="must be writable"):
+        ensure_uids(p, set())
+    assert p.read_bytes() == before
+
+
+def test_ensure_uids_cameras_not_a_table(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text("cameras = 5\n")
+    with pytest.raises(ConfigError, match="'cameras' must be a table"):
+        ensure_uids(p, set())
+
+
+def test_ensure_uids_skips_non_table_section(tmp_path):
+    p = tmp_path / "c.toml"
+    p.write_text('[cameras]\ngarage = "x"\n')
+    assert ensure_uids(p, set()) == {}  # load_config reports it

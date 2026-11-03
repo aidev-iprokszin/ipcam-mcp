@@ -17,6 +17,7 @@ from ipcam_mcp.capabilities import Amount, Direction, Preset, Quality
 from ipcam_mcp.config import DeviceConfig
 from ipcam_mcp.errors import CameraMcpError, ConfigError, DeviceError, scrub
 from ipcam_mcp.media import mask_url, media_path, record_cmd, run_ffmpeg, snapshot_cmd
+from ipcam_mcp.store import ensure_folder
 
 log = logging.getLogger(__name__)
 
@@ -251,9 +252,12 @@ class OnvifCamera:
     def _context(self) -> str:
         return f"{self._cfg.id} ({self._cfg.host}:{self._rtsp_port})"
 
+    def _folder(self) -> Path:
+        return ensure_folder(self._media_dir, self._cfg.uid, self._cfg.id)
+
     async def snapshot(self, quality: Quality) -> Path:
         url = await self.rtsp_url(quality)  # before reserving: a failed lookup leaves no file
-        out = media_path(self._media_dir, self._cfg.id, "jpg")
+        out = media_path(self._folder(), self._cfg.id, "jpg")
         cmd = snapshot_cmd(url, out)
         return await run_ffmpeg(cmd, out, SNAPSHOT_TIMEOUT, self._context, [self._cfg.password])
 
@@ -261,7 +265,7 @@ class OnvifCamera:
         if not 1 <= seconds <= MAX_RECORD_SECONDS:
             raise ValueError(f"seconds must be between 1 and {MAX_RECORD_SECONDS}, got {seconds}")
         url = await self.rtsp_url(quality)
-        out = media_path(self._media_dir, self._cfg.id, "mp4")
+        out = media_path(self._folder(), self._cfg.id, "mp4")
         cmd = record_cmd(url, out, seconds)
         timeout = seconds + RECORD_TIMEOUT_EXTRA
         return await run_ffmpeg(cmd, out, timeout, self._context, [self._cfg.password])

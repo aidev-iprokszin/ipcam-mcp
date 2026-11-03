@@ -21,6 +21,7 @@ def make_cfg(type_: str = "tapo_onvif", **settings) -> DeviceConfig:
         host="10.0.0.5",
         user="u",
         password=PASSWORD,
+        uid="0livroom",
         settings=settings,
     )
 
@@ -155,7 +156,7 @@ async def test_rtsp_url_encodes_special_chars(tmp_path):
 async def test_snapshot_calls_ffmpeg(cam, ffmpeg_calls, tmp_path):
     path = await cam.snapshot("high")
     (call,) = ffmpeg_calls
-    assert path.parent == tmp_path
+    assert path.parent == tmp_path / "0livroom"
     assert path.name.startswith("livingroom_") and path.suffix == ".jpg"
     assert call["out"] == path
     assert call["timeout"] == 20

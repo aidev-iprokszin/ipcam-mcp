@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from ipcam_mcp import baselines
 from ipcam_mcp.capabilities import PTZ, Amount, Direction, Quality
-from ipcam_mcp.config import config_path, load_config
+from ipcam_mcp.config import AppConfig, config_path
 from ipcam_mcp.errors import CameraMcpError, ConfigError, DeviceError
 from ipcam_mcp.imaging import (
     LIGHTING_PCT,
@@ -28,8 +28,9 @@ from ipcam_mcp.imaging import (
     crop_box,
     crop_jpeg,
 )
-from ipcam_mcp.management import Credentials, Manager
+from ipcam_mcp.management import Credentials, Manager, prepare_config
 from ipcam_mcp.media import make_preview
+from ipcam_mcp.migrate import migrate_flat_layout
 from ipcam_mcp.registry import Registry
 
 log = logging.getLogger("ipcam_mcp")
@@ -221,7 +222,7 @@ def build_server(
                 baselines.check_name(name)
                 path = await adapter.snapshot(quality)
                 pos = await _position(adapter) if isinstance(adapter, PTZ) else None
-                baselines.save_baseline(registry.media_dir, camera, name, path, quality, pos)
+                baselines.save_baseline(registry.folder(camera), name, path, quality, pos)
                 data, _ = crop_jpeg(path, None)
                 return [
                     Image(data=data, format="jpeg"),
@@ -243,13 +244,13 @@ def build_server(
             async with registry.lock(camera):
                 base = None
                 if baseline is not None:
-                    base = baselines.load_baseline(registry.media_dir, camera, baseline)
+                    base = baselines.load_baseline(registry.folder(camera), baseline)
                     ref_path = base.path
                     label = f"baseline '{baseline}'"
                     age = datetime.now().astimezone() - base.taken
                     age_s = age.total_seconds()
                 else:
-                    ref_path = baselines.latest_snapshot(registry.media_dir, camera)
+                    ref_path = baselines.latest_snapshot(registry.folder(camera))
                     if ref_path is None:
                         raise ValueError(
                             f"no previous snapshot of '{camera}' to compare with; "
@@ -366,14 +367,14 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
 
     @mcp.tool()
     async def add_camera(
-        id: str,
+        name: str,
         host: str,
         ctx: Context,
         credentials_via: Literal["form", "file"] = "form",
         onvif_port: int | None = None,
     ) -> str:
         """Add an ONVIF/RTSP IP camera. Ask the user for the camera's IP address (from its app
-        or router) and pick a short id such as "garage".
+        or router) and pick a short name such as "garage".
 
         Credentials are never passed as arguments: by default the user is shown a login form;
         with credentials_via="file" a secrets file is created for the user to fill in, then
@@ -395,16 +396,16 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
 
         async def run() -> str:
             if credentials_via == "file":
-                return await manager.add(id, host, None, onvif_port)
+                return await manager.add(name, host, None, onvif_port)
             if not _can_show_form(ctx):
-                return NO_FORM_PREFIX + await manager.add(id, host, None, onvif_port)
-            return await manager.add(id, host, prompt, onvif_port)
+                return NO_FORM_PREFIX + await manager.add(name, host, None, onvif_port)
+            return await manager.add(name, host, prompt, onvif_port)
 
         return await _guarded(run)
 
     @mcp.tool()
     async def rename_camera(old: str, new: str) -> str:
-        """Change a camera's id. Its baselines, snapshots and recordings move to the new id."""
+        """Change a camera's name. Its baselines, snapshots and recordings stay with it."""
         return await _guarded(lambda: manager.rename(old, new))
 
     @mcp.tool()
@@ -423,6 +424,21 @@ _PROTECTED_LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 def _is_loopback(host: str) -> bool:
     return host in _PROTECTED_LOCAL_HOSTS
+
+
+def _migrate(cfg: AppConfig) -> None:
+    """Move media from the flat pre-uid layout into per-camera folders (once)."""
+    report = migrate_flat_layout(cfg.media_dir, {n: d.uid for n, d in cfg.devices.items()})
+    if report.moved:
+        log.info(
+            "migrated media of %d camera(s) to per-camera folders; %d removed camera(s) kept",
+            len(report.moved),
+            len(report.removed_cameras),
+        )
+    for path in report.skipped:
+        log.warning("not migrated, a file with that name already exists: %s", path)
+    if report.error:
+        log.warning("media migration stopped: %s; retried at next start", report.error)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -448,11 +464,12 @@ def main(argv: list[str] | None = None) -> None:
     if not path.exists():
         log.info("no config at %s yet; starting with no cameras (add_camera creates it)", path)
     try:
-        cfg = load_config(path, missing_ok=True)
+        cfg = prepare_config(path)
         registry = Registry(cfg)
     except ConfigError as e:
         print(f"ipcam-mcp: {e}", file=sys.stderr)
         sys.exit(2)
+    _migrate(cfg)
 
     manager = Manager(path, registry)
     server = build_server(registry, manager, allow_management=cfg.allow_management)
