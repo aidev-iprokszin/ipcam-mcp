@@ -1,3 +1,4 @@
+import itertools
 import json
 from datetime import datetime
 
@@ -12,6 +13,7 @@ from ipcam_mcp.scenes import (
     load_scene_baseline,
     parse_bound,
     period_at,
+    predecessor_chain,
     removed_in_scene,
     scene_index,
     timeline,
@@ -218,3 +220,33 @@ def test_successor_candidates_only_removed(tmp_path):
     # old-door: removed, last in front-door. door-l: configured. shed: removed, elsewhere.
     assert [c.uid for c in removed_in_scene(tmp_path, uids, "front-door")] == ["cccccccc"]
     assert removed_in_scene(tmp_path, uids, "garage") == []
+
+
+def chained(tmp_path, uid, name, continues=None, scene="front-door"):
+    meta = CameraMeta(uid, name, T0, (Period(scene, T0, continues),))
+    write_meta(tmp_path / uid, meta)
+    return meta
+
+
+def test_chain_follows_and_stops_on_cycle(tmp_path):
+    a = chained(tmp_path, "aaaaaaaa", "new", "bbbbbbbb")
+    chained(tmp_path, "bbbbbbbb", "mid", "cccccccc")
+    chained(tmp_path, "cccccccc", "old", "bbbbbbbb")  # hand-edited cycle
+    chain = predecessor_chain(tmp_path, a, "front-door")
+    assert [(m.name, f) for m, f in chain] == [
+        ("mid", tmp_path / "bbbbbbbb"),
+        ("old", tmp_path / "cccccccc"),
+    ]
+    assert predecessor_chain(tmp_path, a, "garage") == []
+
+
+def test_chain_stops_at_deleted_folder(tmp_path):
+    a = chained(tmp_path, "aaaaaaaa", "new", "bbbbbbbb")
+    assert predecessor_chain(tmp_path, a, "front-door") == []
+    chained(tmp_path, "bbbbbbbb", "mid", "aaaaaaaa")  # back to the start: a cycle too
+    assert [m.name for m, _ in predecessor_chain(tmp_path, a, "front-door")] == ["mid"]
+    many = [f"{c}" * 8 for c in "abcdefghijklm"]
+    for uid, nxt in itertools.pairwise(many):
+        chained(tmp_path, uid, uid[0], nxt)
+    first = chained(tmp_path, "aaaaaaaa", "a", "bbbbbbbb")
+    assert len(predecessor_chain(tmp_path, first, "front-door")) == 10  # max_steps

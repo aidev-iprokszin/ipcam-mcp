@@ -1060,3 +1060,72 @@ async def test_set_scene_successor_form(managed, tmp_path):
         r = await client.call_tool("set_scene", {"camera": "office", "scene": "office"})
     assert text_of(r) == "moved 'office' to scene 'office'"  # no removed camera in 'office'
     assert cancel.calls == []
+
+
+# --- predecessor fallback ---
+
+NOTE = "(camera changed: angle, lens or resolution may differ)"
+
+
+async def choose(index):
+    async def successor(message, labels):
+        return index
+
+    return successor
+
+
+async def test_compare_falls_back_to_predecessor_with_note(managed, tmp_path, monkeypatch):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    reg.folder("office")
+    await manager.set_scene("office", "garage", successor=await choose(0))
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager)) as client:
+        r = await client.call_tool("camera_compare", {"camera": "office"})
+    assert not r.is_error, text_of(r)
+    assert text_of(r).startswith("Compared with previous snapshot garage_20250101-000000.jpg")
+    assert f"reference taken by 'garage' {NOTE}" in text_of(r)
+
+
+async def test_compare_prefers_own_snapshot(managed, tmp_path, monkeypatch):
+    _, reg, manager = managed
+    leftover(tmp_path / "media")
+    reg.folder("office")
+    await manager.set_scene("office", "garage", successor=await choose(0))
+    Image.new("RGB", (64, 48)).save(reg.folder("office") / "office_20300101-000000.jpg", "JPEG")
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager)) as client:
+        r = await client.call_tool("camera_compare", {"camera": "office"})
+    assert text_of(r).startswith("Compared with previous snapshot office_20300101-000000.jpg")
+    assert "reference taken by" not in text_of(r)
+
+
+async def test_compare_baseline_from_predecessor_two_steps(managed, tmp_path, monkeypatch):
+    from datetime import datetime as dt
+
+    from ipcam_mcp.baselines import save_baseline
+    from ipcam_mcp.store import CameraMeta, Period, write_meta
+
+    _, reg, manager = managed
+    media = tmp_path / "media"
+    old = dt(2025, 1, 1).astimezone()
+    oldest = leftover(media, "zzzzzzzz", "garage")
+    save_baseline(oldest, "door", oldest / "garage_20250101-000000.jpg", "high", None, "garage")
+    write_meta(
+        media / "yyyyyyyy",
+        CameraMeta("yyyyyyyy", "garage-2", old, (Period("garage", old, "zzzzzzzz"),)),
+    )
+    reg.folder("office")
+
+    async def pick_second(message, labels):
+        return next(i for i, label in enumerate(labels) if "'garage-2'" in label)
+
+    await manager.set_scene("office", "garage", successor=pick_second)
+    fake_compare(monkeypatch)
+    async with Client(build_server(reg, manager)) as client:
+        r = await client.call_tool("camera_compare", {"camera": "office", "baseline": "door"})
+        missing = await client.call_tool("camera_compare", {"camera": "office", "baseline": "x"})
+    assert not r.is_error, text_of(r)
+    assert text_of(r).startswith("Compared with baseline 'door'")
+    assert f"reference taken by 'garage' {NOTE}" in text_of(r)
+    assert "baseline 'x' not found; available: door" in text_of(missing)

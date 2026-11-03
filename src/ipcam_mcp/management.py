@@ -481,6 +481,8 @@ class Manager:
                         _files(used.folder),
                     )
                 )
+        targets = [replace(t, description=t.description + self._successor_note(config, t.uid))
+                   for t in targets]  # fmt: skip
         labels = [t.description for t in targets]
         return [
             replace(t, description=f"{t.description} [{t.uid}]")
@@ -488,6 +490,18 @@ class Manager:
             else t
             for t in targets
         ]
+
+    @staticmethod
+    def _successor_note(config: AppConfig, uid: str) -> str:
+        """Which configured cameras continue the camera ``uid`` (they lose the fallback)."""
+        notes = []
+        for name, dev in config.devices.items():
+            meta = store.read_meta(config.media_dir / dev.uid) if dev.uid != uid else None
+            for scene in sorted(
+                {p.scene for p in meta.scenes if p.continues == uid} if meta else ()
+            ):
+                notes.append(f"; predecessor of '{name}' in '{scene}'")
+        return "".join(notes)
 
     def _delete_by_hand(self, name: str, targets: list["_DeleteTarget"]) -> str:
         steps = []

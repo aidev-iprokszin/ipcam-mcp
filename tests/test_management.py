@@ -1133,3 +1133,18 @@ async def test_set_scene_same_scene_reasks_without_continues(env):
         "'office' is already in scene 'office'"
     )
     assert again.calls == []
+
+
+async def test_delete_description_mentions_successor(env):
+    cfg, _, _ = env
+    removed_camera(cfg.parent / "media")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    await mgr.set_scene("office", "garage", successor=asking(0))
+    seen = []
+
+    async def confirm(message, targets):
+        seen.extend(targets)  # and cancel
+
+    assert await mgr.delete("garage", confirm) == "cancelled; nothing was deleted"
+    assert seen[0].endswith("; predecessor of 'office' in 'garage'")

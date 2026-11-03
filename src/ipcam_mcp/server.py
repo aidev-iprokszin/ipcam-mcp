@@ -319,15 +319,21 @@ def build_server(
             # while this call waited (delete/remove/rename_camera, reload).
             adapter = registry.get(camera, "camera")
             folder, meta = _scene_meta(camera)
+            scene = meta.current_scene
+            chain = scenes.predecessor_chain(registry.media_dir, meta, scene)
+            owner = None  # the predecessor whose reference is used, if not the camera's own
             base = None
             if baseline is not None:
-                base = scenes.load_scene_baseline(folder, meta, meta.current_scene, baseline)
+                base, owner = scenes.find_scene_baseline(folder, meta, scene, baseline, chain)
                 ref_path = base.path
                 label = f"baseline '{baseline}'"
                 age = datetime.now().astimezone() - base.taken
                 age_s = age.total_seconds()
             else:
-                ref_path = scenes.latest_in_scene(folder, meta, meta.current_scene)
+                ref_path = scenes.latest_in_scene(folder, meta, scene)
+                if ref_path is None and chain:
+                    owner, owner_folder = chain[0]
+                    ref_path = scenes.latest_in_scene(owner_folder, owner, scene)
                 if ref_path is None:
                     raise ValueError(
                         f"no previous snapshot of '{camera}' to compare with; "
@@ -348,6 +354,11 @@ def build_server(
                     )
             res = compare(ref, path.read_bytes())
             text = _compare_text(res, label, _age(age_s), path, moved)
+            if owner is not None:
+                text += (
+                    f"\nreference taken by '{owner.name}' "
+                    "(camera changed: angle, lens or resolution may differ)"
+                )
             return [Image(data=res.annotated, format="jpeg"), text]
 
     @mcp.tool()
