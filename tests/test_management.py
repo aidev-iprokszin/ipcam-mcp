@@ -1376,3 +1376,29 @@ def test_hand_rename_with_read_only_config_still_loads(env, caplog):
     assert "desk" in config.devices
     assert 'scene = "office"' in caplog.text
     assert [p.scene for p in read_meta(folder).scenes] == ["office"]
+
+
+async def test_rename_keeps_managed_secrets_shared_with_another_camera(env):
+    cfg, secrets_dir, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    managed = secrets_dir / "garage.env"
+    with cfg.open("a") as f:
+        f.write(
+            "\n[cameras.twin]\n"
+            f'uid = "{uid_for("twin")}"\n'
+            'type = "tapo_onvif"\n'
+            f'secrets_file = "{managed}"\n'
+            'host_var = "HOST"\nuser_var = "USER"\npassword_var = "PASSWORD"\n'
+        )
+    await mgr.reload()
+
+    result = await mgr.rename("garage", "carport")
+
+    assert result == (
+        f"renamed 'garage' to 'carport'; its secrets file {managed} is shared with 'twin' "
+        "and keeps its name"
+    )
+    assert managed.exists() and not (secrets_dir / "carport.env").exists()
+    assert tomllib.loads(cfg.read_text())["cameras"]["carport"]["secrets_file"] == str(managed)
+    assert sorted(ids(registry)) == ["carport", "office", "twin"]
