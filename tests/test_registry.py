@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from conftest import uid_for
 
 from ipcam_mcp.adapters.onvif import OnvifPtzCamera
 from ipcam_mcp.config import AppConfig, DeviceConfig
@@ -24,7 +25,9 @@ class FakeCamera:
 
 
 def dev(dev_id: str = "cam", type_: str = "fake", host: str = "10.0.0.9") -> DeviceConfig:
-    return DeviceConfig(id=dev_id, type=type_, host=host, user="u", password="pw", settings={})
+    return DeviceConfig(
+        id=dev_id, type=type_, host=host, user="u", password="pw", uid=uid_for(dev_id)
+    )
 
 
 def app(*devices: DeviceConfig, media_dir: Path = Path("/tmp/m")) -> AppConfig:

@@ -1,19 +1,27 @@
 import asyncio
 import os
+import re
 import stat
 import tomllib
 from pathlib import Path
 
 import pytest
-from conftest import FakeCamPTZ
+from conftest import FakeCamPTZ, uid_for
 from dotenv import dotenv_values
 
 from ipcam_mcp.adapters.onvif import DeviceInfo
 from ipcam_mcp.baselines import latest_snapshot
 from ipcam_mcp.config import load_config
 from ipcam_mcp.errors import ConfigError, DeviceError
-from ipcam_mcp.management import Credentials, Manager, validate_host, validate_id
+from ipcam_mcp.management import (
+    Credentials,
+    Manager,
+    prepare_config,
+    validate_host,
+    validate_id,
+)
 from ipcam_mcp.registry import Registry
+from ipcam_mcp.store import UID_PATTERN
 
 USER = "camuser"
 PASSWORD = "s3cr3t-pw"
@@ -60,6 +68,7 @@ def env(tmp_path):
         "\n"
         "# the office camera\n"
         "[cameras.office]\n"
+        f'uid = "{uid_for("office")}"\n'
         'type = "tapo_onvif"\n'
         f'secrets_file = "{shared}"\n'
         'host_var = "OFFICE_HOST"\n'
@@ -534,6 +543,7 @@ async def test_remove_managed_and_shared(env):
     with cfg.open("a") as f:
         f.write(
             "\n[cameras.twin]\n"
+            f'uid = "{uid_for("twin")}"\n'
             'type = "tapo_onvif"\n'
             f'secrets_file = "{managed}"\n'
             'host_var = "HOST"\nuser_var = "USER"\npassword_var = "PASSWORD"\n'
@@ -685,3 +695,16 @@ async def test_rename_secrets_move_failure_moves_media_back(env, monkeypatch):
     assert (secrets_dir / "garage.env").exists()
     assert cfg.read_bytes() == before
     assert ids(registry) == ["office", "garage"]
+
+
+def test_prepare_config_assigns_and_loads(env):
+    cfg, _, _ = env
+    cfg.write_text(cfg.read_text().replace(f'uid = "{uid_for("office")}"\n', ""))
+    loaded = prepare_config(cfg)
+    uid = loaded.devices["office"].uid
+    assert re.fullmatch(UID_PATTERN, uid)
+    assert tomllib.loads(cfg.read_text())["cameras"]["office"]["uid"] == uid
+
+
+def test_prepare_config_missing_file_is_empty(tmp_path):
+    assert prepare_config(tmp_path / "nope.toml").devices == {}

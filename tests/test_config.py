@@ -2,8 +2,9 @@ import os
 from pathlib import Path
 
 import pytest
+from conftest import uid_for
 
-from ipcam_mcp.config import config_path, load_config
+from ipcam_mcp.config import DEFAULT_MEDIA_DIR, config_path, load_config, media_dir_of
 from ipcam_mcp.errors import ConfigError, scrub
 
 SECRETS = "CAMERA_IP=10.0.0.5\nCAMERA_USER=u\nCAMERA_PASSWORD=p@ss\n"
@@ -17,6 +18,7 @@ def write_device_config(
     drop: str | None = None,
 ) -> Path:
     keys = {
+        "uid": f'"{uid_for("livingroom")}"',
         "type": '"tapo_onvif"',
         "secrets_file": f'"{secrets_file}"',
         "host_var": '"CAMERA_IP"',
@@ -229,7 +231,7 @@ def test_shared_secrets_file_warns_once(tmp_path, secrets, caplog):
     caplog.set_level("WARNING", logger="ipcam_mcp")
     secrets.chmod(0o644)
     second = (
-        f'[cameras.office]\ntype = "onvif"\nsecrets_file = "{secrets}"\n'
+        f'[cameras.office]\nuid = "{uid_for("office")}"\ntype = "onvif"\nsecrets_file = "{secrets}"\n'
         'host_var = "CAMERA_IP"\nuser_var = "CAMERA_USER"\npassword_var = "CAMERA_PASSWORD"\n'
     )
     cfg = load_config(write_device_config(tmp_path, str(secrets), extra_dev=second))
@@ -268,3 +270,44 @@ def test_group_writable_secrets_warning_wording(tmp_path, secrets, caplog):
     secrets.chmod(0o620)  # group-writable, not readable: still exposed
     load_config(write_device_config(tmp_path, str(secrets)))
     assert "accessible by other users" in caplog.text
+
+
+# --- uid ---
+
+
+def test_uid_loaded(tmp_path, secrets):
+    cfg = load_config(write_device_config(tmp_path, str(secrets)))
+    assert cfg.devices["livingroom"].uid == uid_for("livingroom")
+    assert "uid" not in cfg.devices["livingroom"].settings
+
+
+def test_missing_uid_rejected(tmp_path, secrets):
+    with pytest.raises(ConfigError, match="camera 'livingroom': missing uid"):
+        load_config(write_device_config(tmp_path, str(secrets), drop="uid"))
+
+
+def test_invalid_uid_rejected(tmp_path, secrets):
+    path = write_device_config(tmp_path, str(secrets))
+    path.write_text(path.read_text().replace(uid_for("livingroom"), "ABC"))
+    with pytest.raises(ConfigError, match="camera 'livingroom': invalid uid 'ABC'"):
+        load_config(path)
+
+
+def test_duplicate_uid_rejected(tmp_path, secrets):
+    second = (
+        f'[cameras.office]\nuid = "{uid_for("livingroom")}"\ntype = "onvif"\n'
+        f'secrets_file = "{secrets}"\n'
+        'host_var = "CAMERA_IP"\nuser_var = "CAMERA_USER"\npassword_var = "CAMERA_PASSWORD"\n'
+    )
+    with pytest.raises(ConfigError, match="'livingroom' and 'office' share uid"):
+        load_config(write_device_config(tmp_path, str(secrets), extra_dev=second))
+
+
+def test_media_dir_of(tmp_path):
+    assert media_dir_of(tmp_path / "nope.toml") == Path(DEFAULT_MEDIA_DIR).expanduser()
+    cfg = tmp_path / "c.toml"
+    cfg.write_text('media_dir = "/srv/media"\n')
+    assert media_dir_of(cfg) == Path("/srv/media")
+    cfg.write_text("not = [valid")
+    with pytest.raises(ConfigError, match="invalid TOML"):
+        media_dir_of(cfg)

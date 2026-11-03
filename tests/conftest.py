@@ -70,3 +70,10 @@ class FakeCamPTZ:
 
     async def position(self):
         return (0.1, -0.2)
+
+
+def uid_for(name: str) -> str:
+    """A deterministic, valid camera uid for test configs."""
+    import hashlib
+
+    return hashlib.sha1(name.encode()).hexdigest()[:8]

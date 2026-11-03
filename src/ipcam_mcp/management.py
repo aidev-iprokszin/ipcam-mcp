@@ -18,10 +18,10 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-from ipcam_mcp import config_writer, media
+from ipcam_mcp import config_writer, media, store
 from ipcam_mcp.adapters import onvif
 from ipcam_mcp.adapters.onvif import DeviceInfo
-from ipcam_mcp.config import AppConfig, load_config
+from ipcam_mcp.config import AppConfig, load_config, media_dir_of
 from ipcam_mcp.errors import ConfigError
 from ipcam_mcp.registry import Registry
 
@@ -63,8 +63,14 @@ def validate_host(host: str) -> None:
         raise ValueError(message)
 
 
-def _load_or_empty(path: Path) -> AppConfig:
-    """A missing cameras.toml is an empty config: add_camera creates it."""
+def prepare_config(path: Path) -> AppConfig:
+    """Give cameras without a uid one (written to ``path``), then load the config.
+
+    A missing cameras.toml is an empty config: add_camera creates it.
+    """
+    reserved = store.folder_names(media_dir_of(path))
+    for name, uid in config_writer.ensure_uids(path, reserved).items():
+        log.info("camera '%s' got uid %s", name, uid)
     return load_config(path, missing_ok=True)
 
 
@@ -74,7 +80,7 @@ class Manager:
         config_path: Path,
         registry: Registry,
         probe: Prober = onvif.probe,
-        load: Callable[[Path], AppConfig] = _load_or_empty,
+        load: Callable[[Path], AppConfig] = prepare_config,
     ):
         self._config_path = config_path
         self._registry = registry
@@ -133,7 +139,9 @@ class Manager:
                     env_path, {"HOST": host, "USER": creds.user, "PASSWORD": creds.password}
                 )
                 undo.append(lambda: env_path.unlink(missing_ok=True))
+            taken = store.folder_names(config.media_dir) | {d.uid for d in config.devices.values()}
             section: dict[str, Any] = {
+                "uid": store.new_uid(taken),
                 "type": "onvif",
                 "secrets_file": str(env_path),
                 "host_var": "HOST",

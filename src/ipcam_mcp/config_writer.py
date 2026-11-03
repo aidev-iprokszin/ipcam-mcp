@@ -7,11 +7,13 @@ All file replacement is atomic.
 import contextlib
 import os
 import tempfile
+from collections.abc import Collection
 from pathlib import Path
 
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
+from ipcam_mcp import store
 from ipcam_mcp.errors import ConfigError
 
 
@@ -132,3 +134,29 @@ def write_secrets_file(path: Path, values: dict[str, str]) -> None:
         with contextlib.suppress(OSError):
             path.unlink()
         raise ConfigError(f"could not write secrets file {path}: {exc.strerror or exc}") from exc
+
+
+def ensure_uids(path: Path, reserved: Collection[str]) -> dict[str, str]:
+    """Give every camera section without a ``uid`` a new one; returns name -> new uid.
+
+    ``reserved`` are uids that must not be reused (e.g. existing media folders). Nothing is
+    written if no section lacks a uid or the file does not exist.
+    """
+    if not path.exists():
+        return {}
+    doc = _load(path)
+    cameras = doc.get("cameras", {})
+    taken = set(reserved) | {str(s["uid"]) for s in cameras.values() if "uid" in s}
+    assigned: dict[str, str] = {}
+    for name, section in cameras.items():
+        if "uid" not in section:
+            uid = store.new_uid(taken)
+            taken.add(uid)
+            section["uid"] = uid
+            assigned[name] = uid
+    if assigned:
+        try:
+            atomic_write(path, tomlkit.dumps(doc))
+        except ConfigError as e:
+            raise ConfigError(f"{e}; cameras need a uid, so the file must be writable") from e
+    return assigned

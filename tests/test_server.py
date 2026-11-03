@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import FakeCamPTZ
+from conftest import FakeCamPTZ, uid_for
 from mcp import Client
 from mcp.types import INTERNAL_ERROR, ElicitResult, ErrorData
 from PIL import Image
@@ -18,7 +18,9 @@ from ipcam_mcp.server import build_server, main
 
 
 def dev(dev_id="cam", type_="fake", host="10.0.0.9") -> DeviceConfig:
-    return DeviceConfig(id=dev_id, type=type_, host=host, user="u", password="pw", settings={})
+    return DeviceConfig(
+        id=dev_id, type=type_, host=host, user="u", password="pw", uid=uid_for(dev_id)
+    )
 
 
 @pytest.fixture
@@ -314,6 +316,32 @@ def test_main_missing_config_starts_empty(tmp_path, monkeypatch, caplog):
     assert not missing.exists()
 
 
+def test_main_assigns_missing_uids(tmp_path, monkeypatch):
+    secrets = tmp_path / "s.env"
+    secrets.write_text('H="10.0.0.2"\nU="u"\nP="p"\n')
+    secrets.chmod(0o600)
+    cfg = tmp_path / "cameras.toml"
+    cfg.write_text(
+        f'media_dir = "{tmp_path / "media"}"\n[cameras.office]\ntype = "tapo_onvif"\n'
+        f'secrets_file = "{secrets}"\nhost_var = "H"\nuser_var = "U"\npassword_var = "P"\n'
+    )
+    monkeypatch.setenv("IPCAM_MCP_CONFIG", str(cfg))
+    started = {}
+
+    class StubServer:
+        def run(self, transport, **kw):
+            pass
+
+    def fake_build(registry, manager, allow_management):
+        started["cameras"] = registry.list()
+        return StubServer()
+
+    monkeypatch.setattr(server_mod, "build_server", fake_build)
+    main([])
+    assert [c["id"] for c in started["cameras"]] == ["office"]
+    assert 'uid = "' in cfg.read_text()
+
+
 # --- camera management tools ---
 
 
@@ -334,6 +362,7 @@ def managed(tmp_path) -> tuple[Path, Registry, Manager]:
         f'secrets_dir = "{secrets_dir}"\n'
         "\n"
         "[cameras.office]\n"
+        f'uid = "{uid_for("office")}"\n'
         'type = "tapo_onvif"\n'
         f'secrets_file = "{shared}"\n'
         'host_var = "OFFICE_HOST"\n'

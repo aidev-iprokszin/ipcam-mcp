@@ -21,6 +21,7 @@ def make_cfg(type_: str = "tapo_onvif", **settings) -> DeviceConfig:
         host="10.0.0.5",
         user="u",
         password=PASSWORD,
+        uid="0livroom",
         settings=settings,
     )
 

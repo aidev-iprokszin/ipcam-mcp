@@ -14,10 +14,10 @@ import pytest
 import tomlkit
 from mcp import Client
 
-from ipcam_mcp.config import config_path, load_config
+from ipcam_mcp.config import config_path
 from ipcam_mcp.config_writer import write_secrets_file
 from ipcam_mcp.errors import ConfigError
-from ipcam_mcp.management import Manager
+from ipcam_mcp.management import Manager, prepare_config
 from ipcam_mcp.registry import Registry
 from ipcam_mcp.server import build_server
 
@@ -31,7 +31,7 @@ def registry() -> Registry:
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not installed")
     try:
-        reg = Registry(load_config())
+        reg = Registry(prepare_config(config_path()))
     except ConfigError as e:
         pytest.skip(f"no usable config: {e}")
     if DEVICE not in {d["id"] for d in reg.list()}:
@@ -105,7 +105,7 @@ async def test_live_add_snapshot_remove(tmp_path):
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not installed")
     try:
-        real = load_config()
+        real = prepare_config(config_path())
     except ConfigError as e:
         pytest.skip(f"no usable config: {e}")
     if DEVICE not in real.devices:
@@ -119,7 +119,7 @@ async def test_live_add_snapshot_remove(tmp_path):
     copy.write_text(tomlkit.dumps(doc))
     original = copy.read_bytes()
 
-    cfg = load_config(copy)
+    cfg = prepare_config(copy)
     assert cfg.secrets_dir == tmp_path / "secrets"
     registry = Registry(cfg)
     manager = Manager(copy, registry)

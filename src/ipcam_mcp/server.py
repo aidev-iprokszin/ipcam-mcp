@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from ipcam_mcp import baselines
 from ipcam_mcp.capabilities import PTZ, Amount, Direction, Quality
-from ipcam_mcp.config import config_path, load_config
+from ipcam_mcp.config import config_path
 from ipcam_mcp.errors import CameraMcpError, ConfigError, DeviceError
 from ipcam_mcp.imaging import (
     LIGHTING_PCT,
@@ -28,7 +28,7 @@ from ipcam_mcp.imaging import (
     crop_box,
     crop_jpeg,
 )
-from ipcam_mcp.management import Credentials, Manager
+from ipcam_mcp.management import Credentials, Manager, prepare_config
 from ipcam_mcp.media import make_preview
 from ipcam_mcp.registry import Registry
 
@@ -448,7 +448,7 @@ def main(argv: list[str] | None = None) -> None:
     if not path.exists():
         log.info("no config at %s yet; starting with no cameras (add_camera creates it)", path)
     try:
-        cfg = load_config(path, missing_ok=True)
+        cfg = prepare_config(path)
         registry = Registry(cfg)
     except ConfigError as e:
         print(f"ipcam-mcp: {e}", file=sys.stderr)
