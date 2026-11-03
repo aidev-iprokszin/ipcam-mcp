@@ -19,6 +19,8 @@ log = logging.getLogger("ipcam_mcp")
 
 REQUIRED_KEYS = ("type", "secrets_file", "host_var", "user_var", "password_var")
 _UID_RE = re.compile(r"^[a-z0-9]{8}$")  # same as store.UID_PATTERN
+NAME_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,31}$"  # camera, scene and baseline names
+_NAME_RE = re.compile(NAME_PATTERN)
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class DeviceConfig:
     user: str
     password: str = field(repr=False)
     uid: str = ""
+    scene: str = ""  # the loader always sets it (default: the camera's name)
     settings: dict[str, Any] = field(default_factory=dict)
 
 
@@ -100,6 +103,9 @@ def _load_device(dev_id: str, spec: dict[str, Any], checked: set[Path]) -> Devic
         raise ConfigError(f"camera '{dev_id}': missing uid")
     if not isinstance(uid, str) or not _UID_RE.fullmatch(uid):
         raise ConfigError(f"camera '{dev_id}': invalid uid '{uid}' (8 of a-z, 0-9)")
+    scene = spec.get("scene", dev_id)
+    if not isinstance(scene, str) or not _NAME_RE.fullmatch(scene):
+        raise ConfigError(f"camera '{dev_id}': invalid scene '{scene}' (a-z, 0-9, '-', '_')")
     missing = [k for k in REQUIRED_KEYS if k not in spec]
     if missing:
         raise ConfigError(f"camera '{dev_id}': missing required key(s): {', '.join(missing)}")
@@ -119,10 +125,11 @@ def _load_device(dev_id: str, spec: dict[str, Any], checked: set[Path]) -> Devic
             )
         return value
 
-    settings = {k: v for k, v in spec.items() if k not in REQUIRED_KEYS and k != "uid"}
+    settings = {k: v for k, v in spec.items() if k not in (*REQUIRED_KEYS, "uid", "scene")}
     return DeviceConfig(
         id=dev_id,
         uid=uid,
+        scene=scene,
         type=spec["type"],
         host=secret("host_var"),
         user=secret("user_var"),

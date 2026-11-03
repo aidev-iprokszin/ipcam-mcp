@@ -185,6 +185,7 @@ def build_server(
                 {
                     "id": c.name,
                     "uid": c.uid,
+                    "scene": c.scene,
                     "removed": True,
                     "created": c.created.date().isoformat(),
                     "snapshots": c.snapshots,
@@ -415,6 +416,7 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
         ctx: Context,
         credentials_via: Literal["form", "file"] = "form",
         onvif_port: int | None = None,
+        scene: str | None = None,
     ) -> str:
         """Add an ONVIF/RTSP IP camera. Ask the user for the camera's IP address (from its app
         or router) and pick a short name such as "garage".
@@ -425,6 +427,7 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
         user is on Remote Control or a phone and the form does not appear.
 
         onvif_port: only if the camera uses a non-standard ONVIF port (80 and 2020 are tried).
+        scene: the place it watches, if not its own name (several cameras may share a scene).
         """
 
         async def prompt(message: str) -> Credentials | None:
@@ -439,10 +442,10 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
 
         async def run() -> str:
             if credentials_via == "file":
-                return await manager.add(name, host, None, onvif_port)
+                return await manager.add(name, host, None, onvif_port, scene)
             if not _can_show_form(ctx):
-                return NO_FORM_PREFIX + await manager.add(name, host, None, onvif_port)
-            return await manager.add(name, host, prompt, onvif_port)
+                return NO_FORM_PREFIX + await manager.add(name, host, None, onvif_port, scene)
+            return await manager.add(name, host, prompt, onvif_port, scene)
 
         return await _guarded(run)
 
@@ -450,6 +453,12 @@ def _add_management_tools(mcp: MCPServer, manager: Manager, allow_management: bo
     async def rename_camera(old: str, new: str) -> str:
         """Change a camera's name. Its baselines, snapshots and recordings stay with it."""
         return await _guarded(lambda: manager.rename(old, new))
+
+    @mcp.tool()
+    async def set_scene(camera: str, scene: str) -> str:
+        """Move a camera to another scene (the place it watches). Its earlier snapshots stay
+        with the earlier scene; camera_compare only compares within the current scene."""
+        return await _guarded(lambda: manager.set_scene(camera, scene))
 
     @mcp.tool()
     async def remove_camera(name: str) -> str:

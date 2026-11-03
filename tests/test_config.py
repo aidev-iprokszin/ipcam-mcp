@@ -318,3 +318,26 @@ def test_camera_section_not_a_table(tmp_path):
     p.write_text('[cameras]\ngarage = "x"\n')
     with pytest.raises(ConfigError, match="camera 'garage': must be a table"):
         load_config(p)
+
+
+# --- scene ---
+
+
+def test_scene_defaults_to_name(tmp_path, secrets):
+    assert (
+        load_config(write_device_config(tmp_path, str(secrets))).devices["livingroom"].scene
+        == "livingroom"
+    )
+
+
+def test_scene_loaded_not_in_settings(tmp_path, secrets):
+    dev = load_config(
+        write_device_config(tmp_path, str(secrets), extra_dev='scene = "front-door"')
+    ).devices["livingroom"]
+    assert dev.scene == "front-door" and "scene" not in dev.settings
+
+
+@pytest.mark.parametrize("bad", ['"Front Door"', '""', "5", '"../x"'])
+def test_invalid_scene_rejected(tmp_path, secrets, bad):
+    with pytest.raises(ConfigError, match="camera 'livingroom': invalid scene"):
+        load_config(write_device_config(tmp_path, str(secrets), extra_dev=f"scene = {bad}"))

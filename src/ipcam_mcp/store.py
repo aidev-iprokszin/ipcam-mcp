@@ -64,6 +64,7 @@ class StoredCamera:
     recordings: int
     baselines: int
     size: int
+    scene: str = ""  # the scene it was last in
 
 
 _CAPTURE_RE = re.compile(r"^.+_\d{8}-\d{6}(?:-\d+)?\.(jpg|mp4)$")
@@ -201,7 +202,15 @@ def usage(folder: Path, meta: CameraMeta) -> StoredCamera:
             p.stat().st_size for p in folder.rglob("*") if p.is_file() and not p.is_symlink()
         )
     return StoredCamera(
-        meta.uid, meta.name, meta.created, folder, snapshots, recordings, baselines, size
+        meta.uid,
+        meta.name,
+        meta.created,
+        folder,
+        snapshots,
+        recordings,
+        baselines,
+        size,
+        meta.current_scene,
     )
 
 
