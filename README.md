@@ -2,11 +2,30 @@
 
 <!-- mcp-name: io.github.aidev-iprokszin/ipcam-mcp -->
 
+[![PyPI](https://img.shields.io/pypi/v/ipcam-mcp)](https://pypi.org/project/ipcam-mcp/)
+
 An [MCP](https://modelcontextprotocol.io) server that lets Claude Code see through and control
 the IP cameras on your local network (ONVIF + RTSP): snapshots, video clips, pan/tilt and
 change detection, all handled locally.
 
 Any ONVIF camera should work. See [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras) for what has been tested.
+
+## Install
+
+Pick one. All of them run the [ipcam-mcp](https://pypi.org/project/ipcam-mcp/) package from
+PyPI and need ffmpeg and, except pipx, [uv](https://docs.astral.sh/uv/) (see
+[Prerequisites](https://github.com/aidev-iprokszin/ipcam-mcp#prerequisites)).
+
+- **Claude Code plugin** (recommended for Claude Code):
+  `/plugin install ipcam --marketplace aidev-iprokszin/ipcam-mcp`
+- **Claude Code, without the plugin**: `claude mcp add ipcam -s user -- uvx ipcam-mcp`
+- **Other MCP clients** (Cursor, VS Code, Codex CLI, …): configure the stdio command
+  `uvx ipcam-mcp`. See [Other MCP clients](https://github.com/aidev-iprokszin/ipcam-mcp#other-mcp-clients).
+- **A permanent `ipcam-mcp` command**: `uv tool install ipcam-mcp` (or
+  `pipx install ipcam-mcp`), then configure your client to run `ipcam-mcp`. Update with
+  `uv tool upgrade ipcam-mcp` (or `pipx upgrade ipcam-mcp`).
+
+Then add a camera: ask Claude to add one, or follow [Setup](https://github.com/aidev-iprokszin/ipcam-mcp#setup).
 
 ## Tools
 
