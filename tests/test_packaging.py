@@ -78,6 +78,18 @@ def test_plugin_lock_pins_the_package_from_pypi():
     assert every_wheel and all(w["hash"].startswith("sha256:") for w in every_wheel)
 
 
+def test_plugin_lock_covers_linux_and_apple_silicon():
+    # `uv run --frozen` refuses to start on a platform the lock doesn't cover.
+    lock = tomllib.loads((PLUGIN / "uv.lock").read_text())
+    assert sorted(lock["supported-markers"]) == sorted(
+        [
+            "platform_machine == 'x86_64' and sys_platform == 'linux'",
+            "platform_machine == 'aarch64' and sys_platform == 'linux'",
+            "platform_machine == 'arm64' and sys_platform == 'darwin'",
+        ]
+    )
+
+
 def test_plugin_lock_fits_the_directory_file_limit():
     # The plugin directory holds any non-image file over 256 KiB for review.
     assert (PLUGIN / "uv.lock").stat().st_size < 256 * 1024
