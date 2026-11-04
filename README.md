@@ -50,9 +50,6 @@ with `from_path` set to the snapshot you just looked at, to see it closer. Basel
 yourself; don't change or copy it. The uid names the camera's media folder, which also holds a
 `camera.json` with the camera's current name. Because of it, a renamed camera keeps its
 snapshots and baselines, and a new camera that reuses an old name starts with an empty history.
-When you upgrade from 0.2, the first start moves existing snapshots, recordings and baselines
-from the old flat layout into these folders; files of cameras that are no longer configured get
-a folder of their own and are kept.
 
 **Scenes.** A scene is the place a camera watches, such as `front-door` or `garage`. By default
 it is the camera's name; set `scene = "..."` in the camera's section (or use `set_scene`) when
@@ -280,27 +277,6 @@ See [SECURITY.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/SECURIT
   captures close to a scene change: they can be assigned to the neighbouring scene.
 - Media files are never deleted. Clean up `~/.local/share/ipcam-mcp/media/` yourself.
 - HTTP transport has no authentication (see above).
-
-## Upgrading from 0.2
-
-- On the first start, every camera in `cameras.toml` gets a permanent `uid = "..."` line, and
-  existing snapshots, recordings and baselines move from the flat layout into per-camera folders,
-  `<media_dir>/<uid>/`. Files of cameras that are no longer configured are kept in folders of
-  their own (*removed cameras*: `list_cameras(include_removed=true)`, `delete_camera`).
-  Only files named like a camera's capture (`<name>_YYYYmmdd-HHMMSS.jpg|mp4`, where `<name>`
-  is a configured camera or a valid camera name: `a-z`, `0-9`, `-`, `_`) move; other files, such
-  as `IMG_…` photos, stay. A file whose target already exists is left in place with
-  a warning. Once the move has finished, an empty `.flat-layout-migrated` file in `media_dir`
-  keeps it from running again; delete it to repeat the migration. `cameras.toml` must be
-  writable while cameras still need a uid: a read-only file is not changed, and the server
-  stops with an error. (The server never replaces a read-only `cameras.toml`; management tools
-  then fail with "it is read-only".)
-- Every camera is in a scene, by default its name, so existing snapshots and baselines stay in
-  scenes named after their cameras. `camera_compare` now compares only within the camera's
-  current scene.
-- `add_camera` and `remove_camera` take `name` instead of `id`.
-- New tools: `delete_camera`, `set_scene`, `list_scenes`, `scene_snapshot`, `scene_compare`,
-  `scene_timeline`. `camera_snapshot` accepts `from_path` without `camera`.
 
 ## Development
 
