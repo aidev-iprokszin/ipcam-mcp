@@ -234,6 +234,11 @@ requests addressed to other hosts, such as from web pages (DNS-rebinding protect
 `--host` is refused unless you also pass `--allow-remote`; then anyone who can reach the port
 controls your cameras.
 
+## Privacy
+
+The project collects no data; everything stays on your machine except what your MCP
+client receives as tool results. See [PRIVACY.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/PRIVACY.md).
+
 ## Security
 
 See [SECURITY.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/SECURITY.md) for the threat model and how to report a vulnerability.
