@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "ipcam": {
-      "command": "uvx",
-      "args": ["ipcam-mcp==0.4.0"]
+      "command": "uv",
+      "args": ["run", "--frozen", "--project", "${CLAUDE_PLUGIN_ROOT}", "ipcam-mcp"],
+      "env": {"UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/venv"}
     }
   }
 }

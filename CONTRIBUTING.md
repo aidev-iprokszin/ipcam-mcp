@@ -74,10 +74,16 @@ pick up. Issues labelled `good first issue` are a good place to start.
 
 Versions follow [Semantic Versioning](https://semver.org). To release:
 
-1. In a pull request (with its issue), bump `version` in `pyproject.toml` and run `uv lock`.
+1. In a pull request (with its issue), bump `version` in `pyproject.toml` and `server.json`
+   (both fields) and run `uv lock`.
 2. After merging, tag the release (an annotated tag; `v*` tags can't be moved or deleted):
    `git switch main && git pull && git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
 3. The `Release` workflow checks that the tag matches the version, runs the tests, builds the
-   wheel and sdist, and publishes a GitHub Release with generated notes.
+   wheel and sdist, publishes them to PyPI and the MCP Registry, and publishes a GitHub
+   Release with generated notes.
+4. Once the version is on PyPI, move the Claude Code plugin to it in a second pull request:
+   set `version` in `plugins/ipcam/.claude-plugin/plugin.json` and the `ipcam-mcp==` pin in
+   `plugins/ipcam/pyproject.toml`, then run `uv lock --project plugins/ipcam`. The plugin
+   runs the server from that lock, so the lock can only pin a version that is already on PyPI.
 
 By contributing you agree that your contribution is licensed under the [MIT License](LICENSE).

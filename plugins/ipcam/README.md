@@ -16,10 +16,11 @@ above.
 
 ## What it runs
 
-The plugin starts one local MCP server over stdio: `uvx ipcam-mcp==<version>`, the
-[ipcam-mcp](https://pypi.org/project/ipcam-mcp/) package from PyPI, pinned to the version in
-this folder's `.mcp.json`. uv downloads the package and its dependencies from PyPI on first
-use. The server runs `ffmpeg` locally to capture snapshots and clips.
+The plugin starts one local MCP server over stdio with `uv run --frozen`: the
+[ipcam-mcp](https://pypi.org/project/ipcam-mcp/) package from PyPI, installed from this
+folder's `uv.lock`, which pins it and every dependency to an exact version and hash. uv
+downloads them from PyPI on first use and keeps the environment in the plugin's data folder
+(`~/.claude/plugins/data/`). The server runs `ffmpeg` locally to capture snapshots and clips.
 
 ## What it sends and stores
 
