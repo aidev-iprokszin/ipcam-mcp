@@ -71,3 +71,9 @@ def test_plugin_icon_fits_the_directory():
     with Image.open(icon) as im:
         assert im.format == "PNG"
         assert im.width == im.height and 512 <= im.width <= 2048
+
+
+def test_plugin_has_its_own_readme():
+    # The plugin directory wants at least 40 words in the plugin folder, code blocks excluded.
+    text = re.sub(r"```.*?```", "", (PLUGIN / "README.md").read_text(), flags=re.DOTALL)
+    assert len(text.split()) >= 40
