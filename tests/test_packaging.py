@@ -56,6 +56,15 @@ def test_plugin_version_is_a_released_package_version():
     assert version_tuple(plugin["version"]) <= version_tuple(project()["version"])
 
 
+def test_plugin_has_a_readable_display_name():
+    # Shown in the UI and the directory instead of the id "ipcam", which the directory's
+    # name check finds too close to another listing. The marketplace entry sets none,
+    # because one there would take precedence over plugin.json.
+    assert plugin_manifest()["displayName"] == "IP Camera Control"
+    market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+    assert all("displayName" not in entry for entry in market["plugins"])
+
+
 def plugin_project() -> dict:
     return tomllib.loads((PLUGIN / "pyproject.toml").read_text())
 
