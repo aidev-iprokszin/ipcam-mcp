@@ -12,5 +12,6 @@
   "keywords": ["ip-camera", "onvif", "rtsp", "ptz", "mcp"],
   "documentationUrl": "https://github.com/aidev-iprokszin/ipcam-mcp#readme",
   "supportUrl": "https://github.com/aidev-iprokszin/ipcam-mcp/issues",
-  "privacyPolicyUrl": "https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/PRIVACY.md"
+  "privacyPolicyUrl": "https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/TERMS.md"
 }
