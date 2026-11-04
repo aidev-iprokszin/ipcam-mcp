@@ -23,6 +23,8 @@ use. The server runs `ffmpeg` locally to capture snapshots and clips.
 
 ## What it sends and stores
 
+Privacy policy: <https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/PRIVACY.md>.
+
 - **Network:** the server connects only to the cameras you configure, on your local network
   (ONVIF over HTTP and RTSP). It does not contact any other service and has no telemetry.
 - **Stored on your machine:** camera settings in `~/.config/ipcam-mcp/cameras.toml`, camera

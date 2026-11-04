@@ -15,7 +15,8 @@ app:
 - It can **see** (snapshots), **record** video, and **move** pan/tilt cameras.
 - With `allow_management = true` (the default) it can **add, rename and remove** cameras in
   your config. Set `allow_management = false` in `cameras.toml` to turn those tools off.
-- Snapshots, recordings and baselines are stored locally and never deleted by the server.
+- Snapshots, recordings and baselines are stored locally. The server deletes them only
+  through `delete_camera`, after you approve it in a form.
 
 Your MCP client asks before each tool call unless you allowlist tools. If you allowlist,
 consider keeping `camera_record`, `ptz_remove_preset` and `remove_camera` off the list.

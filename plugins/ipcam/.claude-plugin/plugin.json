@@ -9,5 +9,8 @@
   "homepage": "https://github.com/aidev-iprokszin/ipcam-mcp",
   "repository": "https://github.com/aidev-iprokszin/ipcam-mcp",
   "license": "MIT",
-  "keywords": ["ip-camera", "onvif", "rtsp", "ptz", "mcp"]
+  "keywords": ["ip-camera", "onvif", "rtsp", "ptz", "mcp"],
+  "documentationUrl": "https://github.com/aidev-iprokszin/ipcam-mcp#readme",
+  "supportUrl": "https://github.com/aidev-iprokszin/ipcam-mcp/issues",
+  "privacyPolicyUrl": "https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/PRIVACY.md"
 }

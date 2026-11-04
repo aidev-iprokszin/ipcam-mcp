@@ -77,3 +77,12 @@ def test_plugin_has_its_own_readme():
     # The plugin directory wants at least 40 words in the plugin folder, code blocks excluded.
     text = re.sub(r"```.*?```", "", (PLUGIN / "README.md").read_text(), flags=re.DOTALL)
     assert len(text.split()) >= 40
+
+
+def test_plugin_links_point_into_this_repo():
+    plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    blob = "https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/"
+    privacy = plugin["privacyPolicyUrl"]
+    assert privacy.startswith(blob) and (ROOT / privacy.removeprefix(blob)).is_file()
+    assert plugin["supportUrl"] == "https://github.com/aidev-iprokszin/ipcam-mcp/issues"
+    assert plugin["documentationUrl"].startswith("https://github.com/aidev-iprokszin/ipcam-mcp")
