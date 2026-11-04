@@ -156,19 +156,26 @@ Any client that supports stdio servers (Cursor, VS Code, Codex CLI, …) can run
 command: `uvx ipcam-mcp`, or `uv --directory /absolute/path/to/ipcam-mcp run ipcam-mcp` for a
 clone.
 
-**Claude Desktop on Windows with the repo in WSL** (untested): add to
-`%APPDATA%\Claude\claude_desktop_config.json` and restart the app:
+**Claude Desktop on Windows**: the server runs inside WSL2, so install uv and ffmpeg there
+(see *Prerequisites*). In Claude Desktop, open *Settings → Developer → Edit Config*, add the `ipcam`
+entry below to `mcpServers` and keep the rest of the file:
 ```json
 {
   "mcpServers": {
     "ipcam": {
       "command": "wsl.exe",
-      "args": ["-e", "/home/<you>/.local/bin/uv", "--directory",
-               "/home/<you>/path/to/ipcam-mcp", "run", "ipcam-mcp"]
+      "args": ["-e", "/home/<you>/.local/bin/uvx", "ipcam-mcp"]
     }
   }
 }
 ```
+Replace `<you>` with your WSL user name (`which uvx` in WSL shows the path). With several WSL
+distributions, add `"-d", "<distro>"` before `"-e"`. Then quit Claude Desktop from the tray icon
+(closing the window is not enough) and start it again. The server uses the same `cameras.toml`
+and media folder inside WSL as Claude Code there. Use *Edit Config* rather than a fixed path: the
+Microsoft Store version keeps the file under `%LOCALAPPDATA%`, not `%APPDATA%\Claude`. For a
+clone, use `"args": ["-e", "/home/<you>/.local/bin/uv", "--directory",
+"/home/<you>/path/to/ipcam-mcp", "run", "ipcam-mcp"]`.
 
 ### WSL2 networking
 
