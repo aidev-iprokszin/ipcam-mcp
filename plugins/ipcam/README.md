@@ -26,10 +26,11 @@ use. The server runs `ffmpeg` locally to capture snapshots and clips.
 - **Network:** the server connects only to the cameras you configure, on your local network
   (ONVIF over HTTP and RTSP). It does not contact any other service and has no telemetry.
 - **Stored on your machine:** camera settings in `~/.config/ipcam-mcp/cameras.toml`, camera
-  usernames and passwords in local secrets files under `~/.config/ipcam-mcp/secrets/`
-  (the server creates them readable only by you and warns about others), and snapshots, recordings and baselines in
-  `~/.local/share/ipcam-mcp/media`. Nothing is deleted automatically; `delete_camera` removes
-  a camera's files after you approve it in a form.
+  usernames and passwords in local secrets files under `~/.config/ipcam-mcp/secrets/` (the
+  server creates them readable only by you and warns if others can read them), and
+  snapshots, recordings and baselines in `~/.local/share/ipcam-mcp/media`. Nothing is
+  deleted automatically; `delete_camera` removes a camera's files after you approve it in a
+  form.
 - **Returned to Claude:** tool results, including snapshot images, go to Claude as part of
   your conversation, like any other tool output. Recordings stay on disk; only their path is
   returned.

@@ -75,5 +75,5 @@ def test_plugin_icon_fits_the_directory():
 
 def test_plugin_has_its_own_readme():
     # The plugin directory wants at least 40 words in the plugin folder, code blocks excluded.
-    text = re.sub(r"```.*?```", "", (PLUGIN / "README.md").read_text(), flags=re.S)
+    text = re.sub(r"```.*?```", "", (PLUGIN / "README.md").read_text(), flags=re.DOTALL)
     assert len(text.split()) >= 40
