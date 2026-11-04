@@ -60,3 +60,14 @@ def test_marketplace_lists_the_plugin():
     assert entry["name"] == "ipcam"
     assert (ROOT / entry["source"]).resolve() == PLUGIN.resolve()
     assert "version" not in entry  # plugin.json is the only place for it
+
+
+def test_plugin_icon_fits_the_directory():
+    # Anthropic's plugin directory: square PNG, 512-2048 px per side, under 2 MB.
+    from PIL import Image
+
+    icon = PLUGIN / ".claude-plugin" / "icon.png"
+    assert icon.stat().st_size < 2 * 1024 * 1024
+    with Image.open(icon) as im:
+        assert im.format == "PNG"
+        assert im.width == im.height and 512 <= im.width <= 2048
