@@ -107,7 +107,7 @@ predecessor.
    variable *names* go in this file, never the secrets themselves. Use `type = "onvif"`.
 
    Steps 3 and 4 are optional if you let Claude add cameras: without a config file the server
-   starts with no cameras, and `add_camera` (see [Managing cameras](#managing-cameras))
+   starts with no cameras, and `add_camera` (see [Managing cameras](https://github.com/aidev-iprokszin/ipcam-mcp#managing-cameras))
    creates `cameras.toml` and the camera's secrets file for your first camera.
 5. **Use it in Claude Code**: install the plugin, which runs the PyPI package with `uvx`:
    ```
@@ -257,9 +257,9 @@ See [SECURITY.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/SECURIT
 - **Auth errors / `401` / ONVIF error on every PTZ call**: use the camera's local account, not a
   cloud login. See [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras).
 - **Snapshots fail but ONVIF works**: set `stream_high`/`stream_low` (see
-  [Camera settings](#camera-settings)).
+  [Camera settings](https://github.com/aidev-iprokszin/ipcam-mcp#camera-settings)).
 - **`timed out … (camera unreachable?)`**: the camera is offline or not reachable from this
-  machine. See [WSL2 networking](#wsl2-networking).
+  machine. See [WSL2 networking](https://github.com/aidev-iprokszin/ipcam-mcp#wsl2-networking).
 - **`ffmpeg not installed`**: `sudo apt install ffmpeg`.
 - **`camera.json … unreadable, kept as camera.json.bad-…`** in the log: a camera's
   `camera.json` could not be read (for example after a bad hand edit), so a new one was written
@@ -278,7 +278,8 @@ See [SECURITY.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/SECURIT
   saving time ends, a capture counts as taken in the first of the two hours, and after the
   machine's time zone changes, older captures shift by the difference. Both only matter for
   captures close to a scene change: they can be assigned to the neighbouring scene.
-- Media files are never deleted. Clean up `~/.local/share/ipcam-mcp/media/` yourself.
+- Media files are never deleted automatically. `delete_camera` deletes a camera's files after
+  you approve it; otherwise clean up `~/.local/share/ipcam-mcp/media/` yourself.
 - HTTP transport has no authentication (see above).
 
 ## Upgrading from 0.2
