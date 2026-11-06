@@ -86,3 +86,15 @@ def test_plugin_links_point_into_this_repo():
     assert privacy.startswith(blob) and (ROOT / privacy.removeprefix(blob)).is_file()
     assert plugin["supportUrl"] == "https://github.com/aidev-iprokszin/ipcam-mcp/issues"
     assert plugin["documentationUrl"].startswith("https://github.com/aidev-iprokszin/ipcam-mcp")
+
+
+def test_release_signs_the_distributions_before_publishing():
+    # PEP 740 attestations show as "Provenance" on PyPI. uv publish uploads the
+    # `<file>.publish.attestation` files that `pypi-attestations sign` writes, but doesn't
+    # create them. Signing must run in the pypi job: its OIDC identity is the trusted publisher.
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+    pypi_job = workflow[workflow.index("\n  pypi:\n") : workflow.index("\n  mcp-registry:\n")]
+    sign = re.search(r"run: uvx pypi-attestations==[\d.]+ sign dist/\*\n", pypi_job)
+    publish = pypi_job.find("run: uv publish --trusted-publishing always dist/*")
+    assert sign and 0 <= sign.start() < publish
+    assert "--no-attestations" not in pypi_job

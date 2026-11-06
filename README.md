@@ -2,11 +2,30 @@
 
 <!-- mcp-name: io.github.aidev-iprokszin/ipcam-mcp -->
 
-An [MCP](https://modelcontextprotocol.io) server that lets Claude Code see through and control
-the IP cameras on your local network (ONVIF + RTSP): snapshots, video clips, pan/tilt and
-change detection, all handled locally.
+[![PyPI](https://img.shields.io/pypi/v/ipcam-mcp)](https://pypi.org/project/ipcam-mcp/)
+
+An [MCP](https://modelcontextprotocol.io) server that lets Claude Code, or another MCP client,
+see through and control the IP cameras on your local network (ONVIF + RTSP): snapshots, video
+clips, pan/tilt and change detection, all handled locally.
 
 Any ONVIF camera should work. See [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras) for what has been tested.
+
+## Install
+
+Pick one. All of them run the [ipcam-mcp](https://pypi.org/project/ipcam-mcp/) package from
+PyPI and need ffmpeg and, except pipx, [uv](https://docs.astral.sh/uv/) (see
+[Prerequisites](https://github.com/aidev-iprokszin/ipcam-mcp#prerequisites)).
+
+- **Claude Code plugin** (recommended for Claude Code):
+  `/plugin install ipcam --marketplace aidev-iprokszin/ipcam-mcp`
+- **Claude Code, without the plugin**: `claude mcp add ipcam -s user -- uvx ipcam-mcp`
+- **Other MCP clients** (Cursor, VS Code, Codex CLI, …): configure the stdio command
+  `uvx ipcam-mcp`. See [Other MCP clients](https://github.com/aidev-iprokszin/ipcam-mcp#other-mcp-clients).
+- **A permanent `ipcam-mcp` command**: `uv tool install ipcam-mcp` (or
+  `pipx install ipcam-mcp`), then configure your client to run `ipcam-mcp`. Update with
+  `uv tool upgrade ipcam-mcp` (or `pipx upgrade ipcam-mcp`).
+
+Then add a camera: ask Claude to add one, or follow [Setup](https://github.com/aidev-iprokszin/ipcam-mcp#setup).
 
 ## Tools
 
@@ -50,9 +69,6 @@ with `from_path` set to the snapshot you just looked at, to see it closer. Basel
 yourself; don't change or copy it. The uid names the camera's media folder, which also holds a
 `camera.json` with the camera's current name. Because of it, a renamed camera keeps its
 snapshots and baselines, and a new camera that reuses an old name starts with an empty history.
-When you upgrade from 0.2, the first start moves existing snapshots, recordings and baselines
-from the old flat layout into these folders; files of cameras that are no longer configured get
-a folder of their own and are kept.
 
 **Scenes.** A scene is the place a camera watches, such as `front-door` or `garage`. By default
 it is the camera's name; set `scene = "..."` in the camera's section (or use `set_scene`) when
@@ -281,27 +297,6 @@ See [SECURITY.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/SECURIT
 - Media files are never deleted automatically. `delete_camera` deletes a camera's files after
   you approve it; otherwise clean up `~/.local/share/ipcam-mcp/media/` yourself.
 - HTTP transport has no authentication (see above).
-
-## Upgrading from 0.2
-
-- On the first start, every camera in `cameras.toml` gets a permanent `uid = "..."` line, and
-  existing snapshots, recordings and baselines move from the flat layout into per-camera folders,
-  `<media_dir>/<uid>/`. Files of cameras that are no longer configured are kept in folders of
-  their own (*removed cameras*: `list_cameras(include_removed=true)`, `delete_camera`).
-  Only files named like a camera's capture (`<name>_YYYYmmdd-HHMMSS.jpg|mp4`, where `<name>`
-  is a configured camera or a valid camera name: `a-z`, `0-9`, `-`, `_`) move; other files, such
-  as `IMG_…` photos, stay. A file whose target already exists is left in place with
-  a warning. Once the move has finished, an empty `.flat-layout-migrated` file in `media_dir`
-  keeps it from running again; delete it to repeat the migration. `cameras.toml` must be
-  writable while cameras still need a uid: a read-only file is not changed, and the server
-  stops with an error. (The server never replaces a read-only `cameras.toml`; management tools
-  then fail with "it is read-only".)
-- Every camera is in a scene, by default its name, so existing snapshots and baselines stay in
-  scenes named after their cameras. `camera_compare` now compares only within the camera's
-  current scene.
-- `add_camera` and `remove_camera` take `name` instead of `id`.
-- New tools: `delete_camera`, `set_scene`, `list_scenes`, `scene_snapshot`, `scene_compare`,
-  `scene_timeline`. `camera_snapshot` accepts `from_path` without `camera`.
 
 ## Development
 
