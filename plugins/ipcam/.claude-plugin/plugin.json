@@ -1,7 +1,7 @@
 {
   "name": "ipcam",
   "displayName": "IP Camera Control",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "See through and control the IP cameras on your local network (ONVIF/RTSP): snapshots, clips, pan/tilt, change detection",
   "author": {
     "name": "aidev-iprokszin",
