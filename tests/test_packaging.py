@@ -144,6 +144,15 @@ def test_plugin_terms_of_use_point_into_this_repo():
     assert (ROOT / "TERMS.md").is_file()
 
 
+def test_plugin_icon_fills_the_canvas():
+    # The artwork reaches the edges on its longer side; no wide transparent margins.
+    from PIL import Image
+
+    with Image.open(PLUGIN / ".claude-plugin" / "icon.png") as im:
+        left, top, right, bottom = im.convert("RGBA").getchannel("A").getbbox()
+        assert (left, right) == (0, im.width) or (top, bottom) == (0, im.height)
+
+
 def test_plugin_has_its_own_readme():
     # The plugin directory wants at least 40 words in the plugin folder, code blocks excluded.
     text = re.sub(r"```.*?```", "", (PLUGIN / "README.md").read_text(), flags=re.DOTALL)
