@@ -8,7 +8,31 @@ An [MCP](https://modelcontextprotocol.io) server that lets Claude Code, or anoth
 see through and control the IP cameras on your local network (ONVIF + RTSP): snapshots, video
 clips, pan/tilt and change detection, all handled locally.
 
-Any ONVIF camera should work. See [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras) for what has been tested.
+Any ONVIF camera should work. See
+[known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras) for what
+has been tested.
+
+## What you can ask
+
+Once a camera is added, ask in plain words, for example:
+
+- "Take a snapshot of the front door."
+- "Save this view as door-closed." Later: "Does the front door still look like door-closed?"
+- "Did anything change at the front door since the last snapshot?"
+- "Pan the office camera a bit to the left."
+- "Record 10 seconds from the garage."
+- "Show me what the garage cameras captured yesterday."
+
+## Prerequisites
+
+- Linux or WSL2, on the same network as the camera
+- [uv](https://docs.astral.sh/uv/) on your `PATH` (it installs Python 3.13+ and the dependencies
+  for you)
+- ffmpeg: `sudo apt install ffmpeg`
+- An ONVIF-capable IP camera with a local camera account (username and password), with ONVIF
+  and RTSP enabled
+- [Claude Code](https://claude.com/claude-code) or another MCP client that supports stdio
+  servers
 
 ## Install
 
@@ -18,14 +42,112 @@ PyPI and need ffmpeg and, except pipx, [uv](https://docs.astral.sh/uv/) (see
 
 - **Claude Code plugin** (recommended for Claude Code):
   `/plugin install ipcam --marketplace aidev-iprokszin/ipcam-mcp`
+
+  On Claude Code older than 2.1.275, run `/plugin marketplace add aidev-iprokszin/ipcam-mcp`,
+  then `/plugin install ipcam@ipcam-mcp`. The plugin runs the server from a lockfile (every
+  dependency pinned with hashes). Update it with `claude plugin update ipcam@ipcam-mcp`, which
+  also updates the server; a new server version reaches the plugin shortly after its PyPI
+  release.
 - **Claude Code, without the plugin**: `claude mcp add ipcam -s user -- uvx ipcam-mcp`
 - **Other MCP clients** (Cursor, VS Code, Codex CLI, …): configure the stdio command
-  `uvx ipcam-mcp`. See [Other MCP clients](https://github.com/aidev-iprokszin/ipcam-mcp#other-mcp-clients).
+  `uvx ipcam-mcp`. See
+  [Other MCP clients](https://github.com/aidev-iprokszin/ipcam-mcp#other-mcp-clients).
 - **A permanent `ipcam-mcp` command**: `uv tool install ipcam-mcp` (or
   `pipx install ipcam-mcp`), then configure your client to run `ipcam-mcp`. Update with
   `uv tool upgrade ipcam-mcp` (or `pipx upgrade ipcam-mcp`).
 
-Then add a camera: ask Claude to add one, or follow [Setup](https://github.com/aidev-iprokszin/ipcam-mcp#setup).
+Then [add your first camera](https://github.com/aidev-iprokszin/ipcam-mcp#add-your-first-camera).
+
+## Add your first camera
+
+1. **Camera account**: create or find the camera's local ONVIF/RTSP account (username and
+   password). This is **not** your cloud login. See
+   [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras) for
+   where your brand hides it.
+2. **IP address**: look it up in the camera's app or your router. Network discovery is not
+   supported (WSL2 NAT blocks it).
+3. **Ask Claude to add it**, for example "add my camera at 192.0.2.10 as front-door". Claude
+   calls `add_camera`, which asks for the username and password in a login form, so they never
+   pass through the model. Before you type the password, check that the IP in the form is your
+   camera's. Without a config file the server starts with no cameras; `add_camera` creates
+   `cameras.toml` and the camera's secrets file. See
+   [Managing cameras](https://github.com/aidev-iprokszin/ipcam-mcp#managing-cameras) for the
+   other management tools and for clients that cannot show forms.
+
+### Or configure it by hand
+
+1. **Secrets file** (outside any repo), e.g. `~/.config/ipcam-mcp/secrets.env`:
+   ```
+   CAMERA_IP=192.168.x.y
+   CAMERA_USER=...
+   CAMERA_PASSWORD=...
+   ```
+   Make it readable only by you: `chmod 600 <file>`. The server warns at startup if other
+   users can read it.
+2. **Camera config**: copy
+   [`cameras.example.toml`](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/cameras.example.toml)
+   to `~/.config/ipcam-mcp/cameras.toml` (or point `IPCAM_MCP_CONFIG` at another path) and
+   adjust the camera name / variable names. Only variable *names* go in this file, never the
+   secrets themselves. Use `type = "onvif"`.
+
+After editing `cameras.toml` by hand while the server runs, ask Claude to reload the cameras
+(`reload_cameras`).
+
+### Camera settings
+
+All optional, set in the camera's section of `cameras.toml`. A wrong type is reported when the
+config loads.
+
+| Setting | Type | Default |
+|---|---|---|
+| `onvif_port` | integer 1–65535 | 80 |
+| `rtsp_port` | integer 1–65535 | the port in the camera's stream URI, else 554 (a value you set always wins) |
+| `invert_pan` | boolean | false |
+| `ptz` | boolean | false |
+| `stream_high` | path starting with `/` | looked up over ONVIF |
+| `stream_low` | path starting with `/` | looked up over ONVIF |
+
+`ptz = false` means the camera has no pan/tilt tools. Set `stream_high`/`stream_low` if the
+ONVIF lookup fails or picks the wrong stream. Set `invert_pan = true` if `ptz_move left` turns
+the view to the right. Some brands need other values; see
+[known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras).
+
+### Other MCP clients
+
+Any client that supports stdio servers (Cursor, VS Code, Codex CLI, …) can run the same
+command: `uvx ipcam-mcp`, or `uv --directory /absolute/path/to/ipcam-mcp run ipcam-mcp` for a
+clone.
+
+**Claude Desktop on Windows**: the server runs inside WSL2, so install uv and ffmpeg there
+(see *Prerequisites*). In Claude Desktop, open *Settings → Developer → Edit Config*, add the
+`ipcam` entry below to `mcpServers` and keep the rest of the file:
+```json
+{
+  "mcpServers": {
+    "ipcam": {
+      "command": "wsl.exe",
+      "args": ["-e", "/home/<you>/.local/bin/uvx", "ipcam-mcp"]
+    }
+  }
+}
+```
+Replace `<you>` with your WSL user name (`which uvx` in WSL shows the path). With several WSL
+distributions, add `"-d", "<distro>"` before `"-e"`. Then quit Claude Desktop from the tray icon
+(closing the window is not enough) and start it again. The server uses the same `cameras.toml`
+and media folder inside WSL as Claude Code there. Use *Edit Config* rather than a fixed path: the
+Microsoft Store version keeps the file under `%LOCALAPPDATA%`, not `%APPDATA%\Claude`. For a
+clone, use `"args": ["-e", "/home/<you>/.local/bin/uv", "--directory",
+"/home/<you>/path/to/ipcam-mcp", "run", "ipcam-mcp"]`.
+
+### WSL2 networking
+
+If the camera can't be reached from WSL (`nc -zv <ip> 554` fails), enable mirrored networking
+in `%UserProfile%\.wslconfig`:
+```
+[wsl2]
+networkingMode=mirrored
+```
+then run `wsl --shutdown` from Windows.
 
 ## Tools
 
@@ -64,6 +186,50 @@ still apply.
 with `from_path` set to the snapshot you just looked at, to see it closer. Baselines live in
 `<media_dir>/<uid>/baselines/` as a JPEG plus a small JSON file.
 
+## Managing cameras
+
+Instead of editing `cameras.toml` by hand you can let Claude add, rename, remove and delete
+cameras. This is on by default. To turn it off, set `allow_management = false` in
+`cameras.toml` (see `cameras.example.toml`), then run `/mcp reconnect ipcam`; the flag is only
+read at startup. Claude Code still asks before each tool call unless you allowlist it; if you
+allowlist the camera tools, consider leaving `remove_camera`, `delete_camera` and
+`ptz_remove_preset` off the list.
+
+`add_camera` logs into whatever host it is given. Before you type a password into the login form,
+check that the IP it shows is your camera's (from the camera's app or your router), not one the
+agent picked up elsewhere.
+
+| Tool | What it does |
+|---|---|
+| `add_camera(name, host, credentials_via="form", onvif_port=None, scene=None)` | Verifies the login over ONVIF (tries port 80, then 2020, unless you give `onvif_port`), detects pan/tilt, then adds the camera with a new uid. `name` and `scene` are lowercase letters, digits, `-`, `_` (max 32); `scene` defaults to the name |
+| `rename_camera(old, new)` | Changes a camera's name; its uid, scene, baselines, snapshots and recordings stay with it (no files move), and its secrets file is renamed too if the tool created it |
+| `set_scene(camera, scene)` | Moves a camera to another scene (the place it watches). Earlier snapshots and baselines stay with the earlier scene. If removed cameras watched the scene, a form asks whether it replaces one of them (see *Replacing a camera*); with the current scene it asks that again if no predecessor is declared yet |
+| `remove_camera(name)` | Removes the camera from the config; keeps its snapshots, recordings and baselines (it becomes a *removed camera*) |
+| `delete_camera(name)` | Deletes the camera (config entry, its managed secrets file) and its folder with all snapshots, recordings and baselines, or the leftover folder of a removed camera with that name. **You** approve it in a form listing what will be deleted; with several matches you pick one or all. Without form support nothing is deleted and the result says what to delete by hand |
+| `reload_cameras()` | Always available. Re-reads `cameras.toml` after a manual edit and lists the cameras |
+
+Changes apply immediately, without restarting the server. If loading the new config fails, the
+previous `cameras.toml` is restored.
+
+**Credentials never pass through the model.** Two routes:
+
+- **Form** (default): your client shows a login form. MCP forms have no masked field, so the
+  password is visible while you type it, but it is not stored in the conversation. Some clients
+  cannot show a form during a tool call (those on MCP protocol 2026-07-28, some phone (Remote
+  Control) views); there `add_camera` uses the file route and says so in its result.
+- **File** (`credentials_via="file"`): `add_camera` creates `<secrets_dir>/<name>.env` (mode
+  `0600`, default `secrets_dir` is `~/.config/ipcam-mcp/secrets`) with `HOST=`, empty `USER=` and
+  `PASSWORD=`. Fill in USER and PASSWORD yourself, then ask Claude to call `add_camera` again
+  with the same name and host, **keeping `credentials_via="file"`**. Calling it with the default
+  `form` would ask for the credentials again instead of reading the file.
+
+Each camera added this way has its own `<name>.env`, and files at `<secrets_dir>/<name>.env` are
+treated as managed: renamed and deleted along with the camera. Keep hand-made files elsewhere;
+those, such as a shared `secrets.env`, are never renamed or deleted. Secrets files are read
+literally: `${VAR}` in a value is not expanded.
+
+## How it works
+
 **Camera uids.** Every camera has a permanent `uid` (8 characters, `a-z0-9`) in its
 `cameras.toml` section. The server fills it in when it is missing, so you never write one
 yourself; don't change or copy it. The uid names the camera's media folder, which also holds a
@@ -87,168 +253,6 @@ is added as an additional one; call `set_scene` with its current scene later, fr
 shows forms, to declare it a successor. A camera that moves away and later returns to the
 scene keeps its predecessor there. `delete_camera` mentions when a camera is another's
 predecessor.
-
-## Prerequisites
-
-- Linux or WSL2, on the same network as the camera
-- [uv](https://docs.astral.sh/uv/) on your `PATH` (it installs Python 3.13+ and the dependencies
-  for you)
-- ffmpeg: `sudo apt install ffmpeg`
-- An ONVIF-capable IP camera with a local camera account (username and password), with ONVIF
-  and RTSP enabled
-- [Claude Code](https://claude.com/claude-code) or another MCP client that supports stdio
-  servers
-
-## Setup
-
-1. **Install**: nothing to do if you run it with `uvx ipcam-mcp` (see step 5); uv fetches it
-   from [PyPI](https://pypi.org/project/ipcam-mcp/). To work on the code, or to use the
-   project-scoped `.mcp.json`, clone it instead:
-   ```
-   git clone https://github.com/aidev-iprokszin/ipcam-mcp.git && cd ipcam-mcp && uv sync
-   ```
-2. **Camera account**: create or find the camera's local ONVIF/RTSP account (username and
-   password). This is **not** your cloud login. See [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras) for where
-   your brand hides it.
-3. **Secrets file** (outside the repo), e.g. `~/.config/ipcam-mcp/secrets.env`:
-   ```
-   CAMERA_IP=192.168.x.y
-   CAMERA_USER=...
-   CAMERA_PASSWORD=...
-   ```
-   Make it readable only by you: `chmod 600 <file>`. The server warns at startup if other
-   users can read it.
-4. **Camera config**: copy [`cameras.example.toml`](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/cameras.example.toml) to `~/.config/ipcam-mcp/cameras.toml` (or
-   point `IPCAM_MCP_CONFIG` at another path) and adjust the camera name / variable names. Only
-   variable *names* go in this file, never the secrets themselves. Use `type = "onvif"`.
-
-   Steps 3 and 4 are optional if you let Claude add cameras: without a config file the server
-   starts with no cameras, and `add_camera` (see [Managing cameras](https://github.com/aidev-iprokszin/ipcam-mcp#managing-cameras))
-   creates `cameras.toml` and the camera's secrets file for your first camera.
-5. **Use it in Claude Code**: install the plugin, which runs the PyPI package from a lockfile
-   (every dependency pinned with hashes):
-   ```
-   /plugin install ipcam --marketplace aidev-iprokszin/ipcam-mcp
-   ```
-   On Claude Code older than 2.1.275, run `/plugin marketplace add aidev-iprokszin/ipcam-mcp`,
-   then `/plugin install ipcam@ipcam-mcp`. Update it with `claude plugin update ipcam@ipcam-mcp`;
-   the plugin pins the server and its dependencies, so this also updates them. A new server
-   version reaches the plugin shortly after its PyPI release.
-
-   Without the plugin, register the PyPI package in your user scope:
-   ```
-   claude mcp add ipcam -s user -- uvx ipcam-mcp
-   ```
-   In a clone, the repo ships a project-scoped `.mcp.json`, so running `claude`
-   anywhere inside this repo offers the `ipcam` server. Approve it when prompted. If you
-   rejected it by mistake, run `claude mcp reset-project-choices` and start `claude` again. Then
-   ask Claude e.g. "list my cameras" or "take a snapshot of livingroom".
-
-   To use it from **every** folder, also register it in your user scope (inside the repo the
-   project entry takes precedence, so there are no duplicates):
-   ```
-   claude mcp add ipcam -s user -- uv --directory /absolute/path/to/ipcam-mcp run ipcam-mcp
-   ```
-
-### Camera settings
-
-All optional, set in the camera's section of `cameras.toml`. A wrong type is reported when the
-config loads.
-
-| Setting | Type | Default |
-|---|---|---|
-| `onvif_port` | integer 1–65535 | 80 |
-| `rtsp_port` | integer 1–65535 | the port in the camera's stream URI, else 554 (a value you set always wins) |
-| `invert_pan` | boolean | false |
-| `ptz` | boolean | false |
-| `stream_high` | path starting with `/` | looked up over ONVIF |
-| `stream_low` | path starting with `/` | looked up over ONVIF |
-
-`ptz = false` means the camera has no pan/tilt tools. Set `stream_high`/`stream_low` if the
-ONVIF lookup fails or picks the wrong stream. Set `invert_pan = true` if `ptz_move left` turns
-the view to the right. Some brands need other values; see [known cameras](https://github.com/aidev-iprokszin/ipcam-mcp/tree/main/docs/cameras).
-
-### Other MCP clients
-
-Any client that supports stdio servers (Cursor, VS Code, Codex CLI, …) can run the same
-command: `uvx ipcam-mcp`, or `uv --directory /absolute/path/to/ipcam-mcp run ipcam-mcp` for a
-clone.
-
-**Claude Desktop on Windows**: the server runs inside WSL2, so install uv and ffmpeg there
-(see *Prerequisites*). In Claude Desktop, open *Settings → Developer → Edit Config*, add the `ipcam`
-entry below to `mcpServers` and keep the rest of the file:
-```json
-{
-  "mcpServers": {
-    "ipcam": {
-      "command": "wsl.exe",
-      "args": ["-e", "/home/<you>/.local/bin/uvx", "ipcam-mcp"]
-    }
-  }
-}
-```
-Replace `<you>` with your WSL user name (`which uvx` in WSL shows the path). With several WSL
-distributions, add `"-d", "<distro>"` before `"-e"`. Then quit Claude Desktop from the tray icon
-(closing the window is not enough) and start it again. The server uses the same `cameras.toml`
-and media folder inside WSL as Claude Code there. Use *Edit Config* rather than a fixed path: the
-Microsoft Store version keeps the file under `%LOCALAPPDATA%`, not `%APPDATA%\Claude`. For a
-clone, use `"args": ["-e", "/home/<you>/.local/bin/uv", "--directory",
-"/home/<you>/path/to/ipcam-mcp", "run", "ipcam-mcp"]`.
-
-### WSL2 networking
-
-If the camera can't be reached from WSL (`nc -zv <ip> 554` fails), enable mirrored networking
-in `%UserProfile%\.wslconfig`:
-```
-[wsl2]
-networkingMode=mirrored
-```
-then run `wsl --shutdown` from Windows.
-
-## Managing cameras
-
-Instead of editing `cameras.toml` by hand you can let Claude add, rename, remove and delete cameras.
-This is on by default. To turn it off, set `allow_management = false` in `cameras.toml` (see
-`cameras.example.toml`), then run `/mcp reconnect ipcam`; the flag is only read at startup.
-Claude Code still asks before each tool call unless you allowlist it; if you allowlist the
-camera tools, consider leaving `remove_camera`, `delete_camera` and `ptz_remove_preset` off the list.
-
-`add_camera` logs into whatever host it is given. Before you type a password into the login form,
-check that the IP it shows is your camera's (from the camera's app or your router), not one the
-agent picked up elsewhere.
-
-| Tool | What it does |
-|---|---|
-| `add_camera(name, host, credentials_via="form", onvif_port=None, scene=None)` | Verifies the login over ONVIF (tries port 80, then 2020, unless you give `onvif_port`), detects pan/tilt, then adds the camera with a new uid. `name` and `scene` are lowercase letters, digits, `-`, `_` (max 32); `scene` defaults to the name |
-| `rename_camera(old, new)` | Changes a camera's name; its uid, scene, baselines, snapshots and recordings stay with it (no files move), and its secrets file is renamed too if the tool created it |
-| `set_scene(camera, scene)` | Moves a camera to another scene (the place it watches). Earlier snapshots and baselines stay with the earlier scene. If removed cameras watched the scene, a form asks whether it replaces one of them (see *Replacing a camera*); with the current scene it asks that again if no predecessor is declared yet |
-| `remove_camera(name)` | Removes the camera from the config; keeps its snapshots, recordings and baselines (it becomes a *removed camera*) |
-| `delete_camera(name)` | Deletes the camera (config entry, its managed secrets file) and its folder with all snapshots, recordings and baselines, or the leftover folder of a removed camera with that name. **You** approve it in a form listing what will be deleted; with several matches you pick one or all. Without form support nothing is deleted and the result says what to delete by hand |
-| `reload_cameras()` | Always available. Re-reads `cameras.toml` after a manual edit and lists the cameras |
-
-Changes apply immediately, without restarting the server. If loading the new config fails, the
-previous `cameras.toml` is restored.
-
-**IP address.** Network discovery is not supported (WSL2 NAT blocks it), so tell Claude the
-camera's IP from the camera's app or your router.
-
-**Credentials never pass through the model.** Two routes:
-
-- **Form** (default): your client shows a login form. MCP forms have no masked field, so the
-  password is visible while you type it, but it is not stored in the conversation. Clients on
-  MCP protocol 2026-07-28 cannot show the form mid-call, and neither can some phone (Remote
-  Control) views; there `add_camera` always uses the secrets-file route and says so in its
-  result.
-- **File** (`credentials_via="file"`): `add_camera` creates `<secrets_dir>/<name>.env` (mode
-  `0600`, default `secrets_dir` is `~/.config/ipcam-mcp/secrets`) with `HOST=`, empty `USER=` and
-  `PASSWORD=`. Fill in USER and PASSWORD yourself, then ask Claude to call `add_camera` again
-  with the same name and host, **keeping `credentials_via="file"`**. Calling it with the default
-  `form` would ask for the credentials again instead of reading the file.
-
-Each camera added this way has its own `<name>.env`, and files at `<secrets_dir>/<name>.env` are
-treated as managed: renamed and deleted along with the camera. Keep hand-made files elsewhere;
-those, such as a shared `secrets.env`, are never renamed or deleted. Secrets files are read literally: `${VAR}` in a
-value is not expanded.
 
 ## Transports
 
@@ -309,6 +313,21 @@ See [SECURITY.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/SECURIT
 
 ## Development
 
+To work on the code, clone the repo:
+```
+git clone https://github.com/aidev-iprokszin/ipcam-mcp.git && cd ipcam-mcp && uv sync
+```
+The repo ships a project-scoped `.mcp.json`, so running `claude` anywhere inside the clone
+offers the `ipcam` server, run from your checkout. Approve it when prompted. If you rejected it
+by mistake, run `claude mcp reset-project-choices` and start `claude` again.
+
+To use the checkout from **every** folder, also register it in your user scope (inside the repo
+the project entry takes precedence, so there are no duplicates):
+```
+claude mcp add ipcam -s user -- uv --directory /absolute/path/to/ipcam-mcp run ipcam-mcp
+```
+
+Tests and lint:
 ```
 uv run pytest            # unit tests (no network; the preview test is skipped without ffmpeg)
 uv run pytest -m live    # against the real camera from your config (IPCAM_MCP_CAMERA, default livingroom)
