@@ -340,3 +340,5 @@ This project was built with [Claude Code](https://claude.com/claude-code).
 ## License
 
 [MIT](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/LICENSE)
+
+Terms of use: [TERMS.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/TERMS.md).

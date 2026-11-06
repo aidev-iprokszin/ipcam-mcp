@@ -136,6 +136,14 @@ def test_plugin_icon_fits_the_directory():
         assert im.width == im.height and 512 <= im.width <= 2048
 
 
+def test_plugin_terms_of_use_point_into_this_repo():
+    # Listing field of the plugin directory; Claude Code itself ignores it.
+    plugin = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text())
+    blob = "https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/"
+    assert plugin["termsOfServiceUrl"] == blob + "TERMS.md"
+    assert (ROOT / "TERMS.md").is_file()
+
+
 def test_plugin_has_its_own_readme():
     # The plugin directory wants at least 40 words in the plugin folder, code blocks excluded.
     text = re.sub(r"```.*?```", "", (PLUGIN / "README.md").read_text(), flags=re.DOTALL)
