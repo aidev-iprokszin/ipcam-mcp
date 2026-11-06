@@ -3,10 +3,10 @@
 # Update after a release: set the version below, then run `uv lock --project plugins/ipcam`.
 [project]
 name = "ipcam-plugin"
-version = "0.4.0"
+version = "0.4.1"
 description = "Locked environment for the ipcam Claude Code plugin"
 requires-python = ">=3.13"
-dependencies = ["ipcam-mcp==0.4.0"]
+dependencies = ["ipcam-mcp==0.4.1"]
 
 [tool.uv]
 package = false
