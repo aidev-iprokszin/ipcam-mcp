@@ -25,6 +25,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Install dependencies
         run: uv sync --locked
+      - name: Plugin lock is up to date
+        run: uv lock --check --project plugins/ipcam
       - name: Lint
         run: uv run ruff check
       - name: Format
