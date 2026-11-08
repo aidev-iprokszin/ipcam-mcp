@@ -284,3 +284,58 @@ async def test_naive_times_in_camera_json_work(registry, tmp_path):
     r = await call(registry, "scene_timeline", {"scene": "front-door"})
     assert not r.is_error, texts(r)
     assert "old-door" in texts(r)[0]
+
+
+async def test_scene_timeline_start_after_end(registry):
+    r = await call(
+        registry,
+        "scene_timeline",
+        {"scene": "front-door", "start": "2026-11-05", "end": "2026-11-04"},
+    )
+    assert r.is_error
+    assert "start (2026-11-05) is after end (2026-11-04)" in texts(r)[0]
+
+
+async def test_scene_timeline_empty_without_range(registry, tmp_path):
+    (tmp_path / "dddddddd" / "shed_20250103-080000.jpg").unlink()
+    r = await call(registry, "scene_timeline", {"scene": "shed"})
+    assert not r.is_error
+    assert texts(r)[0] == "no captures of 'shed' yet"
+
+
+async def test_scene_timeline_scans_the_folders_once(registry, monkeypatch):
+    from ipcam_mcp import scenes
+
+    calls = []
+    real = scenes._folders
+    monkeypatch.setattr(scenes, "_folders", lambda *a: calls.append(1) or real(*a))
+    r = await call(registry, "scene_timeline", {"scene": "front-door"})
+    assert not r.is_error
+    assert len(calls) == 1
+
+
+async def test_scene_timeline_limit_in_schema(registry):
+    async with Client(build_server(registry)) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    limit = tools["scene_timeline"].input_schema["properties"]["limit"]
+    assert (limit["minimum"], limit["maximum"]) == (1, 500)
+
+
+@pytest.mark.parametrize("tool", ["scene_snapshot", "scene_compare", "scene_record"])
+async def test_scene_tool_every_camera_fails(registry, tmp_path, monkeypatch, tool):
+    jpg(tmp_path / "aaaaaaaa" / "door-l_20200101-000000.jpg")  # something to compare with
+    jpg(tmp_path / "bbbbbbbb" / "door-r_20200101-000000.jpg")
+    for name in ("door-l", "door-r"):
+        cam = registry.get(name, "camera")
+
+        async def broken(*args, _name=name, **kwargs):
+            raise DeviceError(f"{_name}: timed out")
+
+        monkeypatch.setattr(cam, "snapshot", broken)
+        monkeypatch.setattr(cam, "record", broken)
+    r = await call(registry, tool, {"scene": "front-door"})
+    assert r.is_error
+    assert (
+        "every camera in 'front-door' failed: "
+        "[door-l] door-l: timed out; [door-r] door-r: timed out"
+    ) in texts(r)[0]

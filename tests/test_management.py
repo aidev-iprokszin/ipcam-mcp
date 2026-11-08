@@ -1152,6 +1152,30 @@ async def test_delete_description_mentions_successor(env):
     assert seen[0].endswith("; predecessor of 'office' in 'garage'")
 
 
+async def test_delete_description_mentions_successor_deeper_in_the_chain(env):
+    """office continues garage (removed), which continued garage-old: deleting garage-old
+    still takes a reference away from office."""
+    cfg, _, _ = env
+    media = cfg.parent / "media"
+    removed_camera(media, "yyyyyyyy", "garage-old", scene="garage")
+    write_meta(
+        media / "zzzzzzzz",
+        CameraMeta("zzzzzzzz", "garage", OLD, (store.Period("garage", OLD, "yyyyyyyy"),)),
+    )
+    (media / "zzzzzzzz" / "garage_20250102-000000.jpg").write_bytes(b"x")
+    mgr, registry, _ = make_manager(cfg)
+    registry.folder("office")
+    await mgr.set_scene("office", "garage", successor=asking(1))  # labels oldest first
+    assert last_period(registry, "office").continues == "zzzzzzzz"
+    seen = []
+
+    async def confirm(message, targets):
+        seen.extend(targets)
+
+    await mgr.delete("garage-old", confirm)
+    assert seen[0].endswith("; predecessor of 'office' in 'garage'")
+
+
 async def test_successor_labels_unique_for_twins(env):
     """Two removed cameras with the same name, date and counts must stay distinguishable."""
     cfg, _, _ = env

@@ -201,8 +201,8 @@ def build_server(
 
     @mcp.tool(**read_only("List cameras"))
     async def list_cameras(include_removed: bool = False) -> str:
-        """List configured cameras with their ids (names), uids, types and capabilities
-        (camera, ptz). include_removed=true also lists removed cameras whose files are still
+        """List configured cameras with their ids (names), uids, types, scenes (the place
+        each one watches) and capabilities (camera, ptz). include_removed=true also lists removed cameras whose files are still
         on disk ("removed": true), e.g. to clean them up with delete_camera."""
         cameras = registry.list()
         if include_removed:
