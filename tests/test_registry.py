@@ -112,6 +112,16 @@ def test_reload_failure_keeps_old():
     assert r.list() == before
 
 
+def test_check_validates_without_swapping():
+    r = Registry(app(dev("a")), adapters={"fake": FakeCamera})
+    adapter = r.get("a", "camera")
+    with pytest.raises(ConfigError, match="nope"):
+        r.check(app(dev("a"), dev("b", type_="nope")))
+    r.check(app(dev("b")))
+    assert [d["id"] for d in r.list()] == ["a"]
+    assert r.get("a", "camera") is adapter
+
+
 async def test_inflight_op_survives_reload():
     gate = asyncio.Event()
 
@@ -266,3 +276,22 @@ async def test_close_retired_cancelled_after_first_close():
     release.set()
     await reg.close_retired()
     assert closed == ["a", "b"]
+
+
+class SceneCamera(FakeCamera):
+    def update_scene(self, scene):
+        self.cfg = dataclasses.replace(self.cfg, scene=scene)
+
+
+def test_reload_hands_a_kept_adapter_its_new_scene():
+    reg = Registry(app(dev("cam")), adapters={"fake": SceneCamera})
+    adapter = reg.get("cam", "camera")
+    reg.reload(app(dataclasses.replace(dev("cam"), scene="porch")))
+    assert reg.get("cam", "camera") is adapter
+    assert adapter.cfg.scene == "porch"
+
+
+def test_check_leaves_a_kept_adapter_alone():
+    reg = Registry(app(dev("cam")), adapters={"fake": SceneCamera})
+    reg.check(app(dataclasses.replace(dev("cam"), scene="porch")))
+    assert reg.get("cam", "camera").cfg.scene == ""

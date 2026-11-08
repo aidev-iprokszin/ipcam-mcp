@@ -1145,3 +1145,17 @@ async def test_predecessor_baseline_skips_position_check(managed, tmp_path, monk
         r = await client.call_tool("camera_compare", {"camera": "office", "baseline": "door"})
     assert not r.is_error, text_of(r)
     assert "moved" not in text_of(r)
+
+
+def test_migrate_skipped_file_says_to_move_it_by_hand(tmp_path, caplog):
+    """The marker stops later runs, so the skip warning is shown once: say what to do (#122)."""
+    uid = uid_for("office")
+    media = tmp_path / "media"
+    (media / uid).mkdir(parents=True)
+    (media / "office_20261103-111200.jpg").write_bytes(b"flat")
+    (media / uid / "office_20261103-111200.jpg").write_bytes(b"already")
+    dev = DeviceConfig(id="office", type="onvif", host="192.0.2.1", user="u", password="p", uid=uid)
+    with caplog.at_level("WARNING", logger="ipcam_mcp"):
+        server_mod._migrate(AppConfig(media_dir=media, devices={"office": dev}))
+    assert f"stays in {media}" in caplog.text
+    assert "move it by hand" in caplog.text

@@ -1281,6 +1281,7 @@ async def test_rename_reports_unwritable_folder_after_commit(env, monkeypatch):
     result = await mgr.rename("office", "front")
     assert result.startswith("renamed 'office' to 'front'")
     assert "; could not update its media folder (" in result
+    assert "the next capture records the new name" in result
 
 
 async def test_set_scene_reports_unwritable_folder_after_commit(env, monkeypatch):
@@ -1535,3 +1536,39 @@ async def test_delete_reports_a_kept_secrets_file_nobody_uses(env):
     assert f"keeps its secrets file {kept}, which no other camera uses" in seen[0]
     assert f"{kept} is no longer used by any camera" in result
     assert kept.exists()
+
+
+async def test_hand_edit_not_recorded_when_the_config_cannot_load(env):
+    """A hand edit that also breaks the config (unknown type) must not leave a scene period
+    behind once it is reverted (#122)."""
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    good = cfg.read_text()
+    cfg.write_text(good.replace('type = "tapo_onvif"', 'type = "bogus"\nscene = "desk"'))
+    with pytest.raises(ConfigError, match="unknown type"):
+        await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    assert [p.scene for p in read_meta(folder).scenes] == ["office"]
+
+
+async def test_rename_after_hand_rename_waits_for_capture_under_old_name(env):
+    """The registry still runs the camera as 'office' until a reload, so rename must take
+    that camera's lock, not the lock of the name in cameras.toml (#122)."""
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+    cfg.write_text(cfg.read_text().replace("[cameras.office]", "[cameras.desk]"))
+    order: list[str] = []
+
+    async def capture():
+        async with registry.lock("office"):
+            await asyncio.sleep(0.05)
+            order.append("capture done")
+
+    task = asyncio.create_task(capture())
+    await asyncio.sleep(0)
+    await mgr.rename("desk", "porch")
+    order.append("renamed")
+    await task
+    assert order == ["capture done", "renamed"]
+    assert read_meta(folder).name == "porch"

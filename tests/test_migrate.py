@@ -230,3 +230,32 @@ def test_configured_name_outside_pattern_still_moves(tmp_path):
     report = migrate_flat_layout(m, {"Office": U})
     assert report.moved == {"Office": 1}
     assert (m / U / "Office_20240101-120000.jpg").exists()
+
+
+def _read_only_marker(monkeypatch):
+    real_touch = Path.touch
+
+    def touch(self, *a, **k):
+        if self.name == migrate.MARKER:
+            raise PermissionError(errno.EACCES, "Read-only file system", str(self))
+        return real_touch(self, *a, **k)
+
+    monkeypatch.setattr(Path, "touch", touch)
+
+
+def test_read_only_media_dir_with_nothing_to_migrate_does_not_warn(tmp_path, monkeypatch, caplog):
+    (tmp_path / "media").mkdir()
+    _read_only_marker(monkeypatch)
+    with caplog.at_level("DEBUG", logger="ipcam_mcp"):
+        migrate_flat_layout(tmp_path / "media", {"office": U})
+    assert migrate.MARKER in caplog.text
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
+def test_read_only_marker_after_a_migration_still_warns(tmp_path, monkeypatch, caplog):
+    m = tmp_path / "media"
+    put(m / "office_20261103-111200.jpg", b"flat")
+    _read_only_marker(monkeypatch)
+    with caplog.at_level("WARNING", logger="ipcam_mcp"):
+        migrate_flat_layout(m, {"office": U})
+    assert migrate.MARKER in caplog.text

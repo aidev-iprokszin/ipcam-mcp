@@ -77,7 +77,7 @@ def migrate_flat_layout(
     except OSError:
         return report  # no media_dir yet
     if not groups:
-        _mark_done(media_dir)
+        _mark_done(media_dir, quiet=True)
         return report
 
     existing = store.folder_names(media_dir)
@@ -96,15 +96,22 @@ def migrate_flat_layout(
         return report
     with contextlib.suppress(OSError):
         (media_dir / "baselines").rmdir()
-    _mark_done(media_dir)
+    _mark_done(media_dir, quiet=not (report.moved or report.skipped))
     return report
 
 
-def _mark_done(media_dir: Path) -> None:
+def _mark_done(media_dir: Path, *, quiet: bool) -> None:
+    """Write the marker. Without it the migration runs again next start, which is harmless;
+    with nothing moved or skipped (e.g. a read-only media_dir) not worth a warning each start."""
     try:
         (media_dir / MARKER).touch()
-    except OSError as e:  # the migration runs again next start; harmless
-        log.warning("could not write %s: %s", media_dir / MARKER, e.strerror or e)
+    except OSError as e:
+        log.log(
+            logging.DEBUG if quiet else logging.WARNING,
+            "could not write %s: %s",
+            media_dir / MARKER,
+            e.strerror or e,
+        )
 
 
 def _migrate_groups(

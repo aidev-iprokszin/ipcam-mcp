@@ -271,6 +271,10 @@ class OnvifCamera:
     def _context(self) -> str:
         return f"{self._cfg.id} ({self._cfg.host}:{self._rtsp_port})"
 
+    def update_scene(self, scene: str) -> None:
+        """Take over a scene-only config change; the connection stays."""
+        self._cfg = dataclasses.replace(self._cfg, scene=scene)
+
     def _folder(self) -> Path:
         return ensure_folder(
             self._media_dir, self._cfg.uid, self._cfg.id, self._cfg.scene or self._cfg.id
