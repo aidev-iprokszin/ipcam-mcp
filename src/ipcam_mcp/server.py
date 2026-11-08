@@ -257,7 +257,7 @@ def build_server(
         """Take a still picture from a camera. Returns the image (downscaled to at most 1280 px
         wide) and the path of the full-size JPEG saved on the local machine.
 
-        quality: "high" = main stream (1080p); "low" = sub stream (smaller, quicker).
+        quality: "high" = main stream (full resolution set on the camera); "low" = sub stream (smaller, quicker).
         crop: [x, y, w, h] as fractions of the frame (0-1) to see a detail at full resolution.
         region: a named ninth of the frame instead of crop (not both).
         from_path: reuse an earlier full-size snapshot (e.g. the one just viewed, or one from
@@ -385,7 +385,7 @@ def build_server(
         Returns the file path and size; the video itself is not returned, so take a snapshot
         if you need to see the scene.
 
-        quality: "high" = main stream (1080p); "low" = sub stream (smaller file).
+        quality: "high" = main stream (full resolution set on the camera); "low" = sub stream (smaller file).
         """
 
         async def op(cam):

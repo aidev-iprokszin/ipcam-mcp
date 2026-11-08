@@ -169,7 +169,8 @@ then run `wsl --shutdown` from Windows.
 | `scene_timeline(scene, start=None, end=None, limit=50)` | The scene's snapshots, recordings and baselines, newest first, from every camera that watched it (removed ones too). `start`/`end`: `YYYY-MM-DD` (whole day) or an ISO datetime; `limit` 1–500 |
 
 `camera` is a camera's name: its section name in `cameras.toml`. `quality="high"` uses the
-camera's main stream (1080p), `"low"` the sub stream (smaller, quicker). Media is saved to the
+camera's main stream (its resolution is set on the camera), `"low"` the sub stream (smaller,
+quicker). Media is saved to the
 camera's own folder, `<media_dir>/<uid>/<camera>_<YYYYmmdd-HHMMSS>.jpg|.mp4` (`media_dir`
 defaults to `~/.local/share/ipcam-mcp/media`).
 
@@ -182,7 +183,9 @@ hints for the client; the server's own safeguards (such as `delete_camera`'s app
 still apply.
 
 **Compare and crop.** `camera_compare` lists the grid cells that changed (the same names as
-`region`) and a box around them. Pass a changed cell as `region` to `camera_snapshot`, ideally
+`region`) and a box around them. It compares the frames at the size the camera sends them,
+so the stream resolution you set on the camera decides how small a change it can notice; a
+reference of another size is scaled to the new frame. Pass a changed cell as `region` to `camera_snapshot`, ideally
 with `from_path` set to the snapshot you just looked at, to see it closer. Baselines live in
 `<media_dir>/<uid>/baselines/` as a JPEG plus a small JSON file.
 

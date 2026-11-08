@@ -5,7 +5,6 @@ import pytest
 from PIL import Image, ImageDraw
 
 from ipcam_mcp.imaging import (
-    COMPARE_WIDTH,
     LIGHTING_PCT,
     NO_CHANGE_PCT,
     REGIONS,
@@ -109,5 +108,22 @@ def test_compare_aspect_mismatch():
     assert r.aspect_mismatch is True
 
 
-def test_compare_width_constant():
-    assert COMPARE_WIDTH == 320
+def test_compare_sees_small_detail_at_native_size():
+    # A 4x4 px light in a 1280x720 frame: lost if the frame is scaled down first.
+    cur = noisy(1280, 720)
+    ImageDraw.Draw(cur).rectangle([1000, 100, 1003, 103], fill="white")
+    r = compare(jpeg(noisy(1280, 720)), jpeg(cur))
+    assert r.box is not None
+    x, y, w, h = r.box
+    assert x <= 1000 / 1280 < x + w
+    assert y <= 100 / 720 < y + h
+    assert w < 0.02 and h < 0.03
+
+
+def test_compare_reference_of_other_size():
+    # e.g. a 720p baseline compared with a frame after the camera moved to 2K
+    big = noisy(1280, 720).resize((1920, 1080))
+    r = compare(jpeg(noisy(1280, 720)), jpeg(big))
+    assert r.changed_pct < NO_CHANGE_PCT
+    assert r.box is None
+    assert not r.aspect_mismatch
