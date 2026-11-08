@@ -217,6 +217,10 @@ agent picked up elsewhere.
 Changes apply immediately, without restarting the server. If loading the new config fails, the
 previous `cameras.toml` is restored.
 
+The server never replaces a read-only `cameras.toml`. Make it read-only (`chmod 444`) if you
+want to keep it as you wrote it: the management tools then fail with "it is read-only" and leave
+it unchanged.
+
 **Credentials never pass through the model.** Two routes:
 
 - **Form** (default): your client shows a login form. MCP forms have no masked field, so the

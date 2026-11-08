@@ -78,7 +78,13 @@ def _delete_form(targets: list[str]) -> type[BaseModel]:
     """Approval form for delete_camera: a checkbox for one target, a choice for several."""
     if len(targets) == 1:
         return create_model(
-            "DeleteForm", confirm=(bool, Field(default=False, description=f"Delete {targets[0]}"))
+            "DeleteForm",
+            confirm=(
+                bool,
+                Field(
+                    default=False, title="Delete permanently", description=f"Delete {targets[0]}"
+                ),
+            ),
         )
     choices = Literal[(*targets, DELETE_ALL)]  # type: ignore[valid-type]
     return create_model(

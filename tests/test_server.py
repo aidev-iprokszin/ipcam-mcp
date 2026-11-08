@@ -850,6 +850,7 @@ async def test_delete_camera_form_flow(managed, tmp_path):
         "garage (removed, added 2025-01-01)"
         in params.requested_schema["properties"]["confirm"]["description"]
     )
+    assert params.requested_schema["properties"]["confirm"]["title"] == "Delete permanently"
 
 
 async def test_delete_camera_form_unchecked_cancels(managed, tmp_path):
