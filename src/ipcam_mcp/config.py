@@ -1,5 +1,6 @@
 """Load ``cameras.toml`` and each camera's secrets env file."""
 
+import ipaddress
 import logging
 import os
 import re
@@ -21,6 +22,7 @@ REQUIRED_KEYS = ("type", "secrets_file", "host_var", "user_var", "password_var")
 _UID_RE = re.compile(r"^[a-z0-9]{8}$")  # same as store.UID_PATTERN
 NAME_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,31}$"  # camera, scene and baseline names
 _NAME_RE = re.compile(NAME_PATTERN)
+_LABEL_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,22 @@ class AppConfig:
     devices: dict[str, DeviceConfig]
     allow_management: bool = True
     secrets_dir: Path = field(default_factory=lambda: Path(DEFAULT_SECRETS_DIR).expanduser())
+
+
+def validate_host(host: str) -> None:
+    # The host is not echoed: a mistyped "user@host" would leak the user name.
+    message = "invalid host: give an IP address or hostname, without scheme, user, port or path"
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        # Scoped IPv6 ("fe80::1%eth0") cannot be put into an RTSP URL reliably.
+        if isinstance(addr, ipaddress.IPv6Address) and addr.scope_id:
+            raise ValueError(message)
+        return
+    if not host or len(host) > 253 or not all(_LABEL_RE.fullmatch(p) for p in host.split(".")):
+        raise ValueError(message)
 
 
 def config_path() -> Path:
@@ -125,13 +143,19 @@ def _load_device(dev_id: str, spec: dict[str, Any], checked: set[Path]) -> Devic
             )
         return value
 
+    host = secret("host_var")
+    try:
+        validate_host(host)
+    except ValueError as e:  # names the variable, not the value
+        raise ConfigError(f"camera '{dev_id}': {spec['host_var']} in {secrets_path}: {e}") from None
+
     settings = {k: v for k, v in spec.items() if k not in (*REQUIRED_KEYS, "uid", "scene")}
     return DeviceConfig(
         id=dev_id,
         uid=uid,
         scene=scene,
         type=spec["type"],
-        host=secret("host_var"),
+        host=host,
         user=secret("user_var"),
         password=secret("password_var"),
         settings=settings,

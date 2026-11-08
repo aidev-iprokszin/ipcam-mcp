@@ -7,7 +7,6 @@ appear in returned strings or raised messages.
 
 import asyncio
 import contextlib
-import ipaddress
 import logging
 import os
 import re
@@ -23,7 +22,13 @@ from dotenv import dotenv_values
 from ipcam_mcp import config_writer, scenes, store
 from ipcam_mcp.adapters import onvif
 from ipcam_mcp.adapters.onvif import DeviceInfo
-from ipcam_mcp.config import NAME_PATTERN, AppConfig, load_config, media_dir_of
+from ipcam_mcp.config import (
+    NAME_PATTERN,
+    AppConfig,
+    load_config,
+    media_dir_of,
+    validate_host,
+)
 from ipcam_mcp.errors import ConfigError
 from ipcam_mcp.registry import Registry
 from ipcam_mcp.tooling import os_error_text
@@ -32,7 +37,6 @@ log = logging.getLogger(__name__)
 
 ID_PATTERN = NAME_PATTERN
 _ID_RE = re.compile(ID_PATTERN)
-_LABEL_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 
 @dataclass(frozen=True)
@@ -64,22 +68,6 @@ def validate_id(cam_id: str) -> None:
 def validate_scene(scene: str) -> None:
     if not _ID_RE.fullmatch(scene):
         raise ValueError(f"invalid scene {scene!r}: must match {ID_PATTERN}")
-
-
-def validate_host(host: str) -> None:
-    # The host is not echoed: a mistyped "user@host" would leak the user name.
-    message = "invalid host: give an IP address or hostname, without scheme, user, port or path"
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        pass
-    else:
-        # Scoped IPv6 ("fe80::1%eth0") cannot be put into an RTSP URL reliably.
-        if isinstance(addr, ipaddress.IPv6Address) and addr.scope_id:
-            raise ValueError(message)
-        return
-    if not host or len(host) > 253 or not all(_LABEL_RE.fullmatch(p) for p in host.split(".")):
-        raise ValueError(message)
 
 
 def prepare_config(path: Path) -> AppConfig:

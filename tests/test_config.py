@@ -341,3 +341,25 @@ def test_scene_loaded_not_in_settings(tmp_path, secrets):
 def test_invalid_scene_rejected(tmp_path, secrets, bad):
     with pytest.raises(ConfigError, match="camera 'livingroom': invalid scene"):
         load_config(write_device_config(tmp_path, str(secrets), extra_dev=f"scene = {bad}"))
+
+
+@pytest.mark.parametrize(
+    "host", ["10.0.0.5:554", "fe80::1%eth0", "rtsp://10.0.0.5", "admin@10.0.0.5", "cam/x"]
+)
+def test_invalid_host_in_secrets_is_a_config_error(tmp_path, host):
+    """A hand-written host must not turn into a broken RTSP URL and an ffmpeg error (#12)."""
+    f = tmp_path / "secrets.env"
+    f.write_text(SECRETS.replace("10.0.0.5", host))
+    cfg = write_device_config(tmp_path, str(f))
+    with pytest.raises(ConfigError) as e:
+        load_config(cfg)
+    message = str(e.value)
+    assert "camera 'livingroom'" in message and "CAMERA_IP" in message
+    assert host not in message  # e.g. "admin@..." would leak the user name
+
+
+@pytest.mark.parametrize("host", ["10.0.0.5", "cam.local", "fd00::5", "garage-cam"])
+def test_valid_hosts_load(tmp_path, host):
+    f = tmp_path / "secrets.env"
+    f.write_text(SECRETS.replace("10.0.0.5", host))
+    assert load_config(write_device_config(tmp_path, str(f))).devices["livingroom"].host == host
