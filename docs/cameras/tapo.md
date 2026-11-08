@@ -24,6 +24,22 @@ Snapshots, recordings and compares use whatever `/stream1` sends, so pick the re
 the app. Right after changing it, or while the app shows live view, the camera may refuse
 `/stream1` for a while ("Operation not permitted"); `/stream2` keeps working.
 
+## Night vision
+
+The night vision mode in the Tapo app decides what snapshots, recordings and compares see in
+the dark:
+
+- **Infrared**: black and white. The IR lights brighten anything close to the camera (walls,
+  roofs), and the sensor shows many fixed, star-like dots that are not in the scene.
+- **Full colour**: uses the camera's white spotlight. To watch a sky or a distant scene,
+  cover the spotlight (a C320WS has no setting to turn IR off). In a night-sky test this
+  recorded about twice as many stars as infrared, and nearby surfaces stayed dark.
+
+A light near the frame, such as a lit window, can show up as a soft bright patch in the sky
+(a reflection in the lens or dome), and switching it on or off changes `camera_compare`
+results. A baseline only fits the mode it was taken in: save one per mode (and one for
+daytime), for example `night-colour` and `day`.
+
 ## Config
 
 ```toml
