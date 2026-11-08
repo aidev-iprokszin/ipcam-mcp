@@ -82,6 +82,8 @@ Then [add your first camera](https://github.com/aidev-iprokszin/ipcam-mcp#add-yo
    CAMERA_USER=...
    CAMERA_PASSWORD=...
    ```
+   The host is a bare IP address or hostname: no `rtsp://`, user name, port or path (ports go
+   in [Camera settings](https://github.com/aidev-iprokszin/ipcam-mcp#camera-settings)).
    Make it readable only by you: `chmod 600 <file>`. The server warns at startup if other
    users can read it.
 2. **Camera config**: copy
@@ -247,7 +249,8 @@ scene. Moving a camera to another scene starts a new period in its `camera.json`
 baselines from before the move stay with the old scene, and `camera_compare` only compares within
 the current one, so it never reports a different place as a change. Editing the `scene` line in
 `cameras.toml` by hand does the same: the new period starts when the server next loads the file
-(`reload_cameras`, a management call, or a restart), not at the time of the edit.
+(`reload_cameras`, a management call, or a restart), not at the time of the edit, and only if
+the edited file loads without errors.
 
 **Replacing a camera.** When a camera enters a scene where a removed camera was last (with
 `add_camera`, or `set_scene`), you are asked in a form whether it replaces one of them, is an
@@ -296,6 +299,10 @@ See [SECURITY.md](https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/SECURIT
 - **`timed out … (camera unreachable?)`**: the camera is offline or not reachable from this
   machine. See [WSL2 networking](https://github.com/aidev-iprokszin/ipcam-mcp#wsl2-networking).
 - **`ffmpeg not installed`**: `sudo apt install ffmpeg`.
+- **`camera '…': CAMERA_IP in …: invalid host`**: the variable in the secrets file holds more
+  than an IP address or hostname, such as a port (`192.0.2.10:554`), `rtsp://` or `user@`.
+  Keep only the address; set ports with `rtsp_port`/`onvif_port`. The value itself is not
+  shown, because it may contain a user name.
 - **`camera.json … unreadable, kept as camera.json.bad-…`** in the log: a camera's
   `camera.json` could not be read (for example after a bad hand edit), so a new one was written
   and the old one kept next to it. To get the camera's creation time and scene history back,
