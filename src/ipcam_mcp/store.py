@@ -15,11 +15,12 @@ import re
 import secrets
 import shutil
 import string
-import tempfile
 from collections.abc import Collection
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from ipcam_mcp.fileio import write_atomic
 
 UID_PATTERN = r"^[a-z0-9]{8}$"
 _UID_RE = re.compile(UID_PATTERN)
@@ -167,18 +168,7 @@ def write_meta(folder: Path, meta: CameraMeta) -> None:
         "created": meta.created.isoformat(),
         "scenes": [_period_json(p) for p in meta.scenes],
     }
-    # Own small atomic write: config_writer imports this module (see #17 for a shared helper).
-    fd, tmp = tempfile.mkstemp(dir=folder, prefix=f".{META}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, folder / META)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    write_atomic(folder / META, json.dumps(data))
 
 
 def _now() -> datetime:

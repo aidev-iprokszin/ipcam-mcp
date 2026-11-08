@@ -381,3 +381,11 @@ def test_enter_scene_unreadable_after_write_raises_os_error(tmp_path, monkeypatc
     monkeypatch.setattr(store, "read_meta", lambda folder: None)
     with pytest.raises(OSError):
         enter_scene(tmp_path, "aaaaaaaa", "cam", "garage")
+
+
+def test_write_meta_keeps_mode_of_replaced_file(tmp_path):
+    folder = tmp_path / "aaaaaaaa"
+    write_meta(folder, CameraMeta("aaaaaaaa", "cam", datetime(2025, 1, 1).astimezone()))
+    (folder / "camera.json").chmod(0o644)
+    write_meta(folder, CameraMeta("aaaaaaaa", "cam2", datetime(2025, 1, 1).astimezone()))
+    assert (folder / "camera.json").stat().st_mode & 0o777 == 0o644

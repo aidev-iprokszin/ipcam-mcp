@@ -6,7 +6,6 @@ All file replacement is atomic.
 
 import contextlib
 import os
-import tempfile
 from collections.abc import Collection
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from tomlkit.exceptions import TOMLKitError
 
 from ipcam_mcp import store
 from ipcam_mcp.errors import ConfigError
+from ipcam_mcp.fileio import write_atomic
 
 
 def atomic_write(path: Path, data: str) -> None:
@@ -26,24 +26,11 @@ def atomic_write(path: Path, data: str) -> None:
     if target.exists() and not os.access(target, os.W_OK):
         # Replacing needs only a writable folder; a read-only file means "don't change me".
         raise ConfigError(f"could not write {path}: it is read-only")
-    tmp_name: str | None = None
     try:
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        if target.exists():
-            os.chmod(tmp_name, target.stat().st_mode & 0o7777)
-        os.replace(tmp_name, target)
-        tmp_name = None
+        write_atomic(target, data)
     except OSError as exc:
         raise ConfigError(f"could not write {path}: {exc.strerror or exc}") from exc
-    finally:
-        if tmp_name is not None:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp_name)
 
 
 def _load(path: Path) -> tomlkit.TOMLDocument:

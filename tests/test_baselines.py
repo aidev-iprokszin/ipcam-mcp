@@ -73,3 +73,24 @@ def test_naive_taken_is_local(tmp_path):
     data["taken"] = "2026-11-01T10:00:00"
     meta_path.write_text(json.dumps(data))
     assert load_baseline(tmp_path, "a").taken == datetime(2026, 11, 1, 10).astimezone()
+
+
+def test_save_fsyncs_both_files_before_replacing(tmp_path, monkeypatch):
+    # A crash right after saving must not leave a truncated baseline (#17).
+    import os
+
+    events: list[str] = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd):
+        events.append("fsync")
+        real_fsync(fd)
+
+    def replace(src, dst):
+        events.append(f"replace {os.path.basename(dst)}")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+    save_baseline(tmp_path, "a", touch(tmp_path, "s.jpg", b"jpeg"), "high", None)
+    assert events == ["fsync", "replace a.jpg", "fsync", "replace a.json"]

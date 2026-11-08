@@ -1,16 +1,13 @@
 """Named reference snapshots for camera_compare, stored in <camera folder>/baselines/."""
 
-import contextlib
 import json
-import os
 import re
-import shutil
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from ipcam_mcp.config import NAME_PATTERN
+from ipcam_mcp.fileio import write_atomic
 from ipcam_mcp.store import parse_time
 
 _NAME_RE = re.compile(NAME_PATTERN)
@@ -38,18 +35,6 @@ def _dir(folder: Path) -> Path:
     return folder / "baselines"
 
 
-def _replace_atomic(dest: Path, write) -> None:
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=".tmp-", suffix=dest.suffix)
-    os.close(fd)
-    try:
-        write(Path(tmp))
-        os.replace(tmp, dest)
-    except BaseException:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp)
-        raise
-
-
 def save_baseline(
     folder: Path,
     name: str,
@@ -69,8 +54,8 @@ def save_baseline(
         "scene": scene,
     }
     jpg = d / f"{name}.jpg"
-    _replace_atomic(jpg, lambda tmp: shutil.copyfile(snapshot, tmp))
-    _replace_atomic(d / f"{name}.json", lambda tmp: tmp.write_text(json.dumps(meta)))
+    write_atomic(jpg, snapshot.read_bytes())
+    write_atomic(d / f"{name}.json", json.dumps(meta))
     return Baseline(name, jpg, parse_time(meta["taken"]), quality, position, scene)
 
 
