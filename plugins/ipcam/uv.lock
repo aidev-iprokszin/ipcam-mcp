@@ -405,7 +405,7 @@ wheels = [
 
 [[package]]
 name = "ipcam-mcp"
-version = "0.4.1"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mcp" },
@@ -414,21 +414,21 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "tomlkit" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/5b/a2fb5cc6535a6e037b434df1fb3c0a1a50c9efd68d4886023ad299b2b011/ipcam_mcp-0.4.1.tar.gz", hash = "sha256:cdd70b74897f01346ace2b5a4df0d1c4cfe4a5e8b421a741d4eedf60700e073f", size = 61552, upload-time = "2026-11-06T15:23:28.547Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/48/54952440483344d02baecebf52219d457fb7a5bd068e48992f9128935d83/ipcam_mcp-0.5.0.tar.gz", hash = "sha256:8485aafa7f0ecfe41622049e0eeb94b0ea8be8cb1d05954b2f913372b3ccf5f3", size = 62539, upload-time = "2026-11-08T16:00:48.662Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/b3/99f4627e943a4b8ead6ce504267367d8aa9ce93c889d4a084f0fe520cefc/ipcam_mcp-0.4.1-py3-none-any.whl", hash = "sha256:a13ca49f96638df7f529c6cb0cd9353e38e3933d1e3b19c07278708c013f362a", size = 61951, upload-time = "2026-11-06T15:23:27.187Z" },
+    { url = "https://files.pythonhosted.org/packages/97/8e/becff25ab199ec724f903a9ab1aaf342112da3d9eef7f3ad477ca527a351/ipcam_mcp-0.5.0-py3-none-any.whl", hash = "sha256:b8697b39e84ce9d8bddd41672b8ca4d8546db3210212d36f42133269b3e903c2", size = 62581, upload-time = "2026-11-08T16:00:47.154Z" },
 ]
 
 [[package]]
 name = "ipcam-plugin"
-version = "0.4.1"
+version = "0.5.0"
 source = { virtual = "." }
 dependencies = [
     { name = "ipcam-mcp" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "ipcam-mcp", specifier = "==0.4.1" }]
+requires-dist = [{ name = "ipcam-mcp", specifier = "==0.5.0" }]
 
 [[package]]
 name = "isodate"
