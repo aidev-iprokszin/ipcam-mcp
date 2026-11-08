@@ -600,14 +600,18 @@ class Manager:
 
     @staticmethod
     def _successor_note(config: AppConfig, uid: str) -> str:
-        """Which configured cameras continue the camera ``uid`` (they lose the fallback)."""
+        """Which configured cameras continue the camera ``uid``, directly or through removed
+        cameras in between (they lose the fallback)."""
         notes = []
         for name, dev in config.devices.items():
             meta = store.read_meta(config.media_dir / dev.uid) if dev.uid != uid else None
-            for scene in sorted(
-                {p.scene for p in meta.scenes if p.continues == uid} if meta else ()
-            ):
-                notes.append(f"; predecessor of '{name}' in '{scene}'")
+            if meta is None:
+                continue
+            for scene in sorted({p.scene for p in meta.scenes}):
+                direct = any(p.scene == scene and p.continues == uid for p in meta.scenes)
+                chain = scenes.predecessor_chain(config.media_dir, meta, scene)
+                if direct or any(m.uid == uid for m, _ in chain):
+                    notes.append(f"; predecessor of '{name}' in '{scene}'")
         return "".join(notes)
 
     def _delete_by_hand(self, name: str, targets: list["_DeleteTarget"]) -> str:

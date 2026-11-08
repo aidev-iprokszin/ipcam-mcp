@@ -275,17 +275,27 @@ def timeline(
     limit: int,
 ) -> tuple[list[TimelineEntry], int]:
     """The scene's captures and baselines from ``start`` to ``end``, newest first: at most
-    ``limit`` of them, and how many more there are."""
+    ``limit`` of them, and how many more there are. One pass over the camera folders; raises
+    ValueError if ``scene`` is not in the scene index."""
     found = []
+    known = {dev.scene or name for name, dev in configured.items()}
     for f in _folders(media_dir, configured):
+        known.update(p.scene for p in f.meta.scenes)
         for item_scene, when, counter, kind, path in _items(f):
+            known.add(item_scene)
             if item_scene != scene:
                 continue
             if (start is not None and when < start) or (end is not None and when > end):
                 continue
             found.append((when, counter, TimelineEntry(when, f.camera, f.removed, kind, path)))
+    if scene not in known:
+        raise unknown_scene(scene, known)
     found.sort(key=lambda t: (t[0], t[1]), reverse=True)
     return [e for _, _, e in found[:limit]], max(len(found) - limit, 0)
+
+
+def unknown_scene(scene: str, known: Collection[str]) -> ValueError:
+    return ValueError(f"scene '{scene}' not found; available: {', '.join(sorted(known)) or 'none'}")
 
 
 def parse_bound(text: str, *, end: bool) -> datetime:
