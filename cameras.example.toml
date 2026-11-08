@@ -18,7 +18,7 @@ media_dir = "~/.local/share/ipcam-mcp/media"
 [cameras.livingroom]
 type = "onvif"
 secrets_file = "~/.config/ipcam-mcp/secrets.env"
-host_var = "CAMERA_IP"
+host_var = "CAMERA_IP"            # IP address or hostname only: no rtsp://, user@, :port or path
 user_var = "CAMERA_USER"          # Tapo: the "Camera Account", not the TP-Link cloud login
 password_var = "CAMERA_PASSWORD"
 # Optional settings (defaults for type "onvif" shown where fixed):
