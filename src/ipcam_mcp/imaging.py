@@ -21,7 +21,6 @@ REGIONS: tuple[str, ...] = (
 
 Box = tuple[float, float, float, float]
 
-COMPARE_WIDTH = 320
 BLUR_RADIUS = 2
 PIXEL_THRESHOLD = 30
 DILATE_SIZE = 5
@@ -92,17 +91,23 @@ class CompareResult:
 
 
 def compare(ref: bytes, cur: bytes) -> CompareResult:
-    """Compare two JPEG frames; see the design spec for the algorithm."""
+    """Compare two JPEG frames at the current frame's native size.
+
+    The reference is scaled to the current frame if their sizes differ. Blur, threshold
+    and dilation work in native pixels, so the detail is whatever the camera sends.
+    """
     ref_img = Image.open(io.BytesIO(ref))
     cur_img = Image.open(io.BytesIO(cur))
     cur_rgb = cur_img.convert("RGB")
     mismatch = abs((ref_img.width / ref_img.height) / (cur_img.width / cur_img.height) - 1) > 0.01
 
-    w = COMPARE_WIDTH
-    h = max(1, round(cur_img.height * w / cur_img.width))
+    w, h = cur_img.size
 
     def prep(img: Image.Image) -> Image.Image:
-        return img.convert("L").resize((w, h)).filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
+        gray = img.convert("L")
+        if gray.size != (w, h):
+            gray = gray.resize((w, h))
+        return gray.filter(ImageFilter.GaussianBlur(BLUR_RADIUS))
 
     # signed difference stored with offset 128, then remove the global shift
     diff = ImageChops.subtract(prep(cur_img), prep(ref_img), scale=1, offset=128)

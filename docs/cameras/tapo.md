@@ -16,8 +16,13 @@ In the Tapo app, open the camera, then Settings, Device Info.
 
 - ONVIF: 2020
 - RTSP: 554
-- `/stream1`: main stream, 1080p
+- `/stream1`: main stream, at the resolution chosen in the Tapo app's video quality setting
+  (a 2K model may still be set to 720p or 1080p)
 - `/stream2`: sub stream
+
+Snapshots, recordings and compares use whatever `/stream1` sends, so pick the resolution in
+the app. Right after changing it, or while the app shows live view, the camera may refuse
+`/stream1` for a while ("Operation not permitted"); `/stream2` keeps working.
 
 ## Config
 
