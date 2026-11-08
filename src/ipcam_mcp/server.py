@@ -373,7 +373,17 @@ def build_server(
         reported cells as `region` in camera_snapshot to look closer."""
         return await _guarded(lambda: compare_camera(camera, baseline, quality))
 
-    add_scene_tools(mcp, registry, snapshot_camera, compare_camera)
+    async def record_camera(camera: str, seconds: int, quality: Quality) -> list:
+        """One camera's clip: the saved path and size. Raises on errors."""
+        registry.get(camera, "camera")  # fail fast for unknown cameras
+        async with registry.lock(camera):
+            # Again under the lock: the camera may have been removed or replaced
+            # while this call waited (delete/remove/rename_camera, reload).
+            adapter = registry.get(camera, "camera")
+            path = await adapter.record(seconds, quality)
+        return [f"Saved {seconds}s clip: {path} ({path.stat().st_size} bytes)"]
+
+    add_scene_tools(mcp, registry, snapshot_camera, compare_camera, record_camera)
 
     @mcp.tool(**changes("Record a video clip", destructive=False, idempotent=False))
     async def camera_record(
@@ -388,11 +398,10 @@ def build_server(
         quality: "high" = main stream (full resolution set on the camera); "low" = sub stream (smaller file).
         """
 
-        async def op(cam):
-            path = await cam.record(seconds, quality)
-            return f"Saved {seconds}s clip: {path} ({path.stat().st_size} bytes)"
+        async def run():
+            return (await record_camera(camera, seconds, quality))[0]
 
-        return await with_camera(camera, "camera", op)
+        return await _guarded(run)
 
     @mcp.tool(**changes("Pan or tilt the camera", destructive=False, idempotent=False))
     async def ptz_move(camera: str, direction: Direction, amount: Amount = "small") -> str:

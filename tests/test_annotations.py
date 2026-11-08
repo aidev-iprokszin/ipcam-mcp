@@ -22,6 +22,7 @@ EXPECTED = {
     "scene_snapshot": (ADD, False),
     "camera_compare": (ADD, False),
     "scene_compare": (ADD, False),
+    "scene_record": (ADD, False),
     "camera_record": (ADD, False),
     "camera_save_baseline": (DESTROY, False),
     "ptz_move": (ADD, False),

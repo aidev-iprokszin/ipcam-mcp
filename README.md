@@ -166,6 +166,7 @@ then run `wsl --shutdown` from Windows.
 | `list_scenes()` | Every scene with its cameras, removed cameras that watched it, the first and last capture and counts |
 | `scene_snapshot(scene, quality="high")` | A snapshot from every camera in the scene, each labelled with the camera's name; a camera that fails reports its error without failing the others |
 | `scene_compare(scene, baseline=None, quality="high")` | `camera_compare` for every camera in the scene, labelled the same way |
+| `scene_record(scene, seconds=10, quality="high")` | Records 1–60 s with every camera in the scene at the same time, labelled the same way; returns each clip's path and size. Combining the clips (split screen etc.) is up to you |
 | `scene_timeline(scene, start=None, end=None, limit=50)` | The scene's snapshots, recordings and baselines, newest first, from every camera that watched it (removed ones too). `start`/`end`: `YYYY-MM-DD` (whole day) or an ISO datetime; `limit` 1–500 |
 
 `camera` is a camera's name: its section name in `cameras.toml`. `quality="high"` uses the

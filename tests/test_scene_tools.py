@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime
 
@@ -119,15 +120,81 @@ async def test_scene_compare_blocks(registry, tmp_path, monkeypatch):
     assert t[2].startswith("[door-r] error: no previous snapshot of 'door-r'")
 
 
+async def test_scene_record_two_cameras(registry):
+    r = await call(registry, "scene_record", {"scene": "front-door", "seconds": 3})
+    assert not r.is_error
+    t = texts(r)
+    assert t[0] == "[door-l]" and t[2] == "[door-r]"
+    assert t[1].startswith("Saved 3s clip: ") and "aaaaaaaa" in t[1]
+    assert t[1].endswith("(1234 bytes)")
+    assert "bbbbbbbb" in t[3]
+
+
+async def test_scene_record_cameras_record_at_the_same_time(registry, monkeypatch):
+    started = 0
+    both = asyncio.Event()
+
+    def recording(cam):
+        original = cam.record
+
+        async def record(seconds, quality):
+            nonlocal started
+            started += 1
+            if started == 2:
+                both.set()
+            # Times out if the cameras record one after another.
+            await asyncio.wait_for(both.wait(), 1)
+            return await original(seconds, quality)
+
+        return record
+
+    for name in ("door-l", "door-r"):
+        cam = registry.get(name, "camera")
+        monkeypatch.setattr(cam, "record", recording(cam))
+    r = await call(registry, "scene_record", {"scene": "front-door", "seconds": 2})
+    t = texts(r)
+    assert t[1].startswith("Saved 2s clip: ") and t[3].startswith("Saved 2s clip: ")
+
+
+async def test_scene_record_one_camera_fails(registry, monkeypatch):
+    cam = registry.get("door-r", "camera")
+
+    async def broken(seconds, quality):
+        raise DeviceError("door-r: timed out")
+
+    monkeypatch.setattr(cam, "record", broken)
+    r = await call(registry, "scene_record", {"scene": "front-door"})
+    assert not r.is_error
+    t = texts(r)
+    assert t[0] == "[door-l]" and t[1].startswith("Saved 10s clip: ")
+    assert t[2] == "[door-r] error: door-r: timed out"
+
+
+async def test_scene_record_seconds_limits(registry, monkeypatch):
+    calls = []
+
+    async def record(seconds, quality):
+        calls.append(seconds)
+
+    for name in ("door-l", "door-r"):
+        monkeypatch.setattr(registry.get(name, "camera"), "record", record)
+    for seconds in (0, 61):
+        r = await call(registry, "scene_record", {"scene": "front-door", "seconds": seconds})
+        assert r.is_error
+        assert "seconds" in texts(r)[0]
+        assert "Unknown tool" not in texts(r)[0]
+    assert calls == []
+
+
 async def test_scene_tools_unknown_scene(registry):
-    for tool in ("scene_snapshot", "scene_compare", "scene_timeline"):
+    for tool in ("scene_snapshot", "scene_compare", "scene_record", "scene_timeline"):
         r = await call(registry, tool, {"scene": "attic"})
         assert r.is_error
         assert "scene 'attic' not found; available: front-door, shed" in texts(r)[0]
 
 
 async def test_scene_snapshot_removed_only_scene_errors(registry):
-    for tool in ("scene_snapshot", "scene_compare"):
+    for tool in ("scene_snapshot", "scene_compare", "scene_record"):
         r = await call(registry, tool, {"scene": "shed"})
         assert r.is_error
         assert (
@@ -189,7 +256,13 @@ async def test_scene_timeline_bad_date(registry):
 async def test_scene_tools_without_management(registry):
     async with Client(build_server(registry, None, allow_management=False)) as client:
         names = {t.name for t in (await client.list_tools()).tools}
-    assert {"list_scenes", "scene_snapshot", "scene_compare", "scene_timeline"} <= names
+    assert {
+        "list_scenes",
+        "scene_snapshot",
+        "scene_compare",
+        "scene_record",
+        "scene_timeline",
+    } <= names
 
 
 async def test_naive_times_in_camera_json_work(registry, tmp_path):
