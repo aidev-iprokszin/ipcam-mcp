@@ -43,7 +43,7 @@ Privacy policy: <https://github.com/aidev-iprokszin/ipcam-mcp/blob/main/PRIVACY.
 Camera: `list_cameras`, `camera_snapshot`, `camera_save_baseline`, `camera_compare`,
 `camera_record`. Pan/tilt: `ptz_move`, `ptz_list_presets`, `ptz_goto_preset`,
 `ptz_save_preset`, `ptz_remove_preset`. Scenes: `list_scenes`, `scene_snapshot`,
-`scene_compare`, `scene_timeline`. Management: `reload_cameras`, `add_camera`,
+`scene_compare`, `scene_record`, `scene_timeline`. Management: `reload_cameras`, `add_camera`,
 `rename_camera`, `set_scene`, `remove_camera`, `delete_camera`. Every tool declares MCP
 annotations (read-only, destructive, idempotent).
 

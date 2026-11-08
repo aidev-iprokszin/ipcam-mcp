@@ -3,8 +3,10 @@
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
+from pydantic import Field
 
 from ipcam_mcp import scenes
 from ipcam_mcp.annotations import changes, read_only
@@ -21,8 +23,10 @@ def add_scene_tools(
     registry: Registry,
     snapshot: Callable[[str, Quality], Awaitable[list]],
     compare: Callable[[str, str | None, Quality], Awaitable[list]],
+    record: Callable[[str, int, Quality], Awaitable[list]],
 ) -> None:
-    """Register the scene tools. ``snapshot``/``compare`` do one camera's work (and raise)."""
+    """Register the scene tools. ``snapshot``/``compare``/``record`` do one camera's work
+    (and raise)."""
 
     def index() -> dict[str, scenes.SceneInfo]:
         return scenes.scene_index(registry.media_dir, registry.configs())
@@ -85,6 +89,19 @@ def add_scene_tools(
     ) -> list:
         """camera_compare for every camera in the scene, labelled with the camera's name."""
         return await guarded(lambda: per_camera(scene, lambda c: compare(c, baseline, quality)))
+
+    @mcp.tool(**changes("Record every camera in a scene", destructive=False, idempotent=False))
+    async def scene_record(
+        scene: str,
+        seconds: Annotated[int, Field(ge=1, le=60)] = 10,
+        quality: Quality = "high",
+    ) -> list:
+        """Record a video clip (1-60 s) with every camera in the scene at the same time,
+        labelled with the camera's name. Returns each file's path and size, not the video.
+
+        quality: "high" = main stream (full resolution set on the camera); "low" = sub stream (smaller file).
+        """
+        return await guarded(lambda: per_camera(scene, lambda c: record(c, seconds, quality)))
 
     @mcp.tool(**read_only("Scene timeline"))
     async def scene_timeline(
