@@ -22,8 +22,9 @@ def client_message(e: Exception) -> str:
 
 
 def os_error_text(e: OSError) -> str:
-    """``<path>: <reason>`` for a file error."""
-    return f"{e.filename}: {e.strerror or type(e).__name__}"
+    """``<path>: <reason>`` for a file error, ``<path> -> <path2>: <reason>`` for a rename."""
+    paths = f"{e.filename} -> {e.filename2}" if e.filename2 else f"{e.filename}"
+    return f"{paths}: {e.strerror or type(e).__name__}"
 
 
 async def guarded[T](fn: Callable[[], Awaitable[T]]) -> T:

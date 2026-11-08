@@ -590,7 +590,12 @@ def _migrate(cfg: AppConfig) -> None:
             len(report.removed_cameras),
         )
     for path in report.skipped:
-        log.warning("not migrated, a file with that name already exists: %s", path)
+        log.warning(
+            "not migrated: %s, because the camera folder already has a file with that name; "
+            "it stays in %s, move it by hand if you need it (this is not reported again)",
+            path.name,
+            path.parent,
+        )
     if report.error:
         log.warning("media migration stopped: %s; retried at next start", report.error)
 

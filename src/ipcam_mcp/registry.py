@@ -39,6 +39,13 @@ class Registry:
         and removed adapters are queued for ``close_retired``.
         """
         devices = self._build(config)
+        for dev_id, (dev, adapter) in devices.items():
+            current = self._devices.get(dev_id)
+            if current is not None and current[1] is adapter and current[0].scene != dev.scene:
+                # The adapter writes the scene into a camera.json it has to recreate.
+                update = getattr(adapter, "update_scene", None)
+                if update is not None:
+                    update(dev.scene)
         kept = {id(adapter) for _, adapter in devices.values()}
         self._retired += [
             (dev_id, adapter)
@@ -47,6 +54,13 @@ class Registry:
         ]
         self._devices = devices
         self._media_dir = config.media_dir
+
+    def check(self, config: AppConfig) -> None:
+        """Raise ``ConfigError`` if ``reload(config)`` would fail; changes nothing.
+
+        Adapters connect only when used, so building and dropping them is cheap.
+        """
+        self._build(config)
 
     async def close_retired(self) -> None:
         """Close adapters dropped by ``reload``, each once its in-flight call has finished.
@@ -130,6 +144,11 @@ class Registry:
 
     def lock(self, device_id: str) -> asyncio.Lock:
         return self._locks.setdefault(device_id, asyncio.Lock())
+
+    def name_of(self, uid: str) -> str | None:
+        """The name the camera with ``uid`` runs under (it differs from cameras.toml after a
+        hand rename until the next reload); None if it is not loaded."""
+        return next((dev_id for dev_id, (dev, _) in self._devices.items() if dev.uid == uid), None)
 
 
 def _capabilities(adapter: object) -> list[str]:

@@ -175,11 +175,22 @@ class Manager:
         self._lock = asyncio.Lock()
 
     def _current(self) -> AppConfig:
-        """The config on disk, with scene changes made there by hand recorded."""
+        """The config on disk, with scene changes made there by hand recorded. They are
+        recorded only if the registry could load the config: a hand edit that also breaks
+        it would otherwise leave a period behind once it is reverted."""
         config = self._load(self._config_path)
+        try:
+            self._registry.check(config)
+        except ConfigError:
+            return config  # the call's own reload reports it
         if self._sync(self._config_path, config):
             config = self._load(self._config_path)
         return config
+
+    def _camera_lock(self, name: str, uid: str) -> asyncio.Lock:
+        """The lock captures of this camera take: under the name the registry runs it as,
+        which is still the old one after a hand rename without reload."""
+        return self._registry.lock(self._registry.name_of(uid) or name)
 
     def _sync_loaded(self, config: AppConfig) -> None:
         """Record scene changes of ``config``, which the registry has just loaded. Only after
@@ -382,7 +393,7 @@ class Manager:
             if sharing:
                 names = ", ".join(f"'{other}'" for other in sharing)
                 note = f"; its secrets file {old_path} is shared with {names} and keeps its name"
-            async with self._registry.lock(old):
+            async with self._camera_lock(old, config.devices[old].uid):
                 await self._mutate(
                     lambda: config_writer.rename_section(self._config_path, old, new, updates),
                     undo,
@@ -394,7 +405,10 @@ class Manager:
                     if (config.media_dir / dev.uid).is_dir():
                         store.ensure_folder(config.media_dir, dev.uid, new, dev.scene or old)
                 except OSError as e:
-                    note += f"; could not update its media folder ({os_error_text(e)})"
+                    note += (
+                        f"; could not update its media folder ({os_error_text(e)}); "
+                        "the next capture records the new name"
+                    )
             await self._registry.close_retired()
             if self._removed_named(config, new):
                 note = (
@@ -424,7 +438,7 @@ class Manager:
             except _Cancelled:
                 return CANCELLED
             # Under the camera lock, so a running capture belongs to one scene, not two.
-            async with self._registry.lock(camera):
+            async with self._camera_lock(camera, dev.uid):
                 await self._mutate(
                     lambda: config_writer.set_key(self._config_path, camera, "scene", scene),
                     close_retired=False,  # needs the camera lock held here
@@ -477,7 +491,7 @@ class Manager:
         pred, note = await self._ask_successor(config, camera, scene, successor)
         if pred is None:
             return already + note
-        async with self._registry.lock(camera):
+        async with self._camera_lock(camera, uid):
             store.enter_scene(config.media_dir, uid, camera, scene, continues=pred.uid)
         return f"'{camera}' continues '{pred.name}' in scene '{scene}'"
 
@@ -634,7 +648,7 @@ class Manager:
         nothing to write into. Returns (note on a secrets failure, paths left over)."""
         owned = self._owned_secrets(name, config.secrets_dir)
         unused = self._unused_secrets(name, config.secrets_dir)
-        async with self._registry.lock(name):
+        async with self._camera_lock(name, uid):
             await self._mutate(
                 lambda: config_writer.remove_section(self._config_path, name),
                 close_retired=False,  # needs the camera lock held here

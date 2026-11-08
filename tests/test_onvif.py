@@ -825,6 +825,14 @@ async def test_new_folder_starts_in_configured_scene(tmp_path, ffmpeg_calls):
     assert read_meta(tmp_path / "0livroom").current_scene == "porch"
 
 
+async def test_update_scene_is_used_when_the_folder_is_recreated(tmp_path, ffmpeg_calls):
+    """A kept adapter learns a scene-only change, so a lost camera.json starts there (#122)."""
+    cam = make_camera(dataclasses.replace(make_cfg(), scene="porch"), tmp_path, lambda *a: None)
+    cam.update_scene("garden")
+    await cam.snapshot("high")
+    assert read_meta(tmp_path / "0livroom").current_scene == "garden"
+
+
 async def test_aclose_finishes_closing_when_cancelled(cam, ptz):
     await cam.list_presets()  # connects
     client = cam._cam
