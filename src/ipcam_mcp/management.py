@@ -506,15 +506,12 @@ class Manager:
                 result += f"; files kept in {folder}; delete_camera('{cam_id}') deletes them"
             return result
 
-    async def removed(self) -> list[store.StoredCamera]:
-        """Removed cameras whose files are still in media_dir."""
-        async with self._lock:
-            config = self._current()
-            return store.removed_cameras(config.media_dir, {d.uid for d in config.devices.values()})
-
     async def delete(self, name: str, confirm: DeletePrompt | None) -> str:
         """Delete the configured camera ``name`` and/or removed cameras of that name, with their
-        files, once the user approves through ``confirm``. Without it nothing happens."""
+        files, once the user approves through ``confirm``. Without it nothing happens.
+
+        The manager lock is not held while the form is open, so other management calls go on;
+        afterwards the targets are looked up again and nothing is deleted if one changed."""
         async with self._lock:
             config = self._current()
             targets = self._delete_targets(config, name)
@@ -522,31 +519,41 @@ class Manager:
                 raise ValueError(f"no camera or leftover files named '{name}'")
             if confirm is None:
                 return self._delete_by_hand(name, targets)
-            if len(targets) == 1:
-                message = f"Delete '{name}' and its files? This cannot be undone."
-            else:
-                message = (
-                    f"Several cameras named '{name}' have files. Which should be deleted? "
-                    "This cannot be undone."
-                )
-            choice = await confirm(message, [t.description for t in targets])
-            if choice is None:
-                return "cancelled; nothing was deleted"
-            chosen = targets if choice == "all" else [targets[choice]]
+        if len(targets) == 1:
+            message = f"Delete '{name}' and its files? This cannot be undone."
+        else:
+            message = (
+                f"Several cameras named '{name}' have files. Which should be deleted? "
+                "This cannot be undone."
+            )
+        choice = await confirm(message, [t.description for t in targets])
+        if choice is None:
+            return "cancelled; nothing was deleted"
+        chosen = targets if choice == "all" else [targets[choice]]
 
+        async with self._lock:
+            config = self._current()
+            now = {(t.uid, t.configured) for t in self._delete_targets(config, name)}
+            if any((t.uid, t.configured) not in now for t in chosen):
+                raise ValueError(
+                    f"'{name}' changed while the approval form was open; nothing was deleted. "
+                    "Call delete_camera again to see what it would delete now."
+                )
             files = 0
+            removed: list[str] = []
             left: list[Path] = []
             notes: list[str] = []
             for target in chosen:
-                files += target.files
                 if target.configured:
-                    note, gone = await self._drop_configured(name, config, target.uid)
-                    left += gone
+                    gone, note, count, rest = await self._drop_configured(name, config, target.uid)
+                    removed += gone
                     if note:
                         notes.append(note)
                 else:
-                    left += store.delete_folder(config.media_dir, target.uid)
-            result = f"deleted '{name}' ({files} file{'s' * (files != 1)})"
+                    count, rest = _delete_folder(config.media_dir, target.uid)
+                files += count
+                left += rest
+            result = f"deleted '{name}': " + ", ".join([_plural(files, "file"), *removed])
             if left:
                 shown = ", ".join(str(p) for p in left[:5]) + (" …" if len(left) > 5 else "")
                 result += f"; could not delete: {shown}"
@@ -573,7 +580,6 @@ class Manager:
                     True,
                     f"{name} (configured): {_counts(used)}; {extra}",
                     folder,
-                    _files(folder),
                 )
             )
         configured = {d.uid for d in config.devices.values()}
@@ -587,7 +593,6 @@ class Manager:
                         False,
                         f"{name} (removed, added {added}): {_counts(used)}",
                         used.folder,
-                        _files(used.folder),
                     )
                 )
         targets = [replace(t, description=t.description + self._successor_note(config, t.uid))
@@ -630,10 +635,11 @@ class Manager:
 
     async def _drop_configured(
         self, name: str, config: AppConfig, uid: str
-    ) -> tuple[str | None, list[Path]]:
+    ) -> tuple[list[str], str | None, int, list[Path]]:
         """Remove ``name`` from the config, its managed secrets file and its folder while
         holding its camera lock, so a running capture finishes first and a queued one finds
-        nothing to write into. Returns (note on a secrets failure, paths left over)."""
+        nothing to write into. Returns (what was removed besides files, note on the secrets
+        file, files deleted, paths left over)."""
         owned = self._owned_secrets(name, config.secrets_dir)
         unused = self._unused_secrets(name, config.secrets_dir)
         async with self._camera_lock(name, uid):
@@ -641,17 +647,19 @@ class Manager:
                 lambda: config_writer.remove_section(self._config_path, name),
                 close_retired=False,  # needs the camera lock held here
             )
+            removed = [f"the [cameras.{name}] section of {self._config_path}"]
             note = None
             if owned is not None:
                 try:
                     owned.unlink(missing_ok=True)
+                    removed.append(str(owned))
                 except OSError as exc:
                     note = f"could not delete {owned}: {exc.strerror or exc}"
             if unused is not None:
                 note = _unused_note(unused).removeprefix("; ")
-            left = store.delete_folder(config.media_dir, uid)
+            files, left = _delete_folder(config.media_dir, uid)
         await self._registry.close_retired()
-        return note, left
+        return removed, note, files, left
 
     async def reload(self) -> list[dict]:
         async with self._lock:
@@ -739,18 +747,19 @@ class Manager:
         """Apply ``change`` and reload; on failure restore the config and run ``undo``.
         Afterwards record scene changes (unless ``sync`` is false) and close the connections
         of replaced or removed cameras (unless ``close_retired`` is false)."""
-        original: str | None = None
+        original: bytes | None = None
         existed = self._config_path.exists()
         try:
             if existed:
-                original = self._config_path.read_bytes().decode("utf-8")
+                original = self._config_path.read_bytes()
+                original.decode("utf-8")  # refuse to change a file that is not UTF-8
             change()
             config = self._load(self._config_path)
             self._registry.reload(config)
         except Exception:
             try:
-                if original is not None:
-                    config_writer.atomic_write(self._config_path, original)
+                if original is not None and not self._holds(original):
+                    config_writer.atomic_write(self._config_path, original.decode("utf-8"))
                 elif not existed:  # first run: the change created the file
                     self._config_path.unlink(missing_ok=True)
             except Exception:
@@ -766,6 +775,21 @@ class Manager:
         if close_retired:
             await self._registry.close_retired()
 
+    def _holds(self, content: bytes) -> bool:
+        """Whether the config file still holds ``content`` (a failed change wrote nothing)."""
+        try:
+            return self._config_path.read_bytes() == content
+        except OSError:
+            return False
+
+
+def _delete_folder(media_dir: Path, uid: str) -> tuple[int, list[Path]]:
+    """``store.delete_folder`` plus how many files it deleted."""
+    folder = store.camera_dir(media_dir, uid)
+    before = _files(folder)
+    left = store.delete_folder(media_dir, uid)
+    return before - _files(folder), left
+
 
 def _unused_note(path: Path) -> str:
     return f"; {path} is no longer used by any camera; delete it by hand if you don't need it"
@@ -777,7 +801,6 @@ class _DeleteTarget:
     configured: bool
     description: str
     folder: Path
-    files: int
 
 
 def _plural(n: int, word: str) -> str:
@@ -793,6 +816,10 @@ def _counts(used: store.StoredCamera) -> str:
 
 def _files(folder: Path) -> int:
     try:
-        return sum(1 for p in folder.rglob("*") if p.is_file() and p.name != store.META)
+        return sum(
+            1
+            for p in folder.rglob("*")
+            if p.is_file() and not p.is_symlink() and p.name != store.META
+        )
     except OSError:
         return 0

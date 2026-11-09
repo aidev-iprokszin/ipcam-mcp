@@ -11,7 +11,7 @@ import pytest
 from conftest import FakeCamPTZ, uid_for
 from dotenv import dotenv_values
 
-from ipcam_mcp import store
+from ipcam_mcp import config_writer, store
 from ipcam_mcp.adapters.onvif import DeviceInfo
 from ipcam_mcp.config import load_config
 from ipcam_mcp.errors import ConfigError, DeviceError
@@ -847,12 +847,98 @@ async def test_remove_result_points_to_delete_camera(env):
     assert folder.exists()
 
 
-async def test_removed_lists_leftovers(env):
+async def test_delete_form_does_not_block_other_management_calls(env):
     cfg, _, _ = env
     removed_folder(cfg, "zzzzzzzz", "garage")
+    mgr, _, _ = make_manager(cfg)
+    reloaded: list[list[dict]] = []
+
+    async def confirm(message, targets):
+        reloaded.append(await asyncio.wait_for(mgr.reload(), 1))
+
+    assert await mgr.delete("garage", confirm) == "cancelled; nothing was deleted"
+    assert [c["id"] for c in reloaded[0]] == ["office"]
+
+
+@pytest.mark.parametrize("change", ["hand_edit", "rename", "remove"])
+async def test_delete_refuses_when_camera_changed_while_form_open(env, change):
+    cfg, _, _ = env
     mgr, registry, _ = make_manager(cfg)
-    registry.folder("office")
-    assert [(c.uid, c.name) for c in await mgr.removed()] == [("zzzzzzzz", "garage")]
+    folder = registry.folder("office")
+    (folder / "office_20261103-111200.jpg").write_bytes(b"x")
+
+    async def confirm(message, targets):
+        if change == "hand_edit":
+            config_writer.remove_section(cfg, "office")
+        elif change == "rename":
+            await asyncio.wait_for(mgr.rename("office", "desk"), 1)
+        else:
+            await asyncio.wait_for(mgr.remove("office"), 1)
+        return 0
+
+    with pytest.raises(ValueError, match="changed while the approval form was open"):
+        await mgr.delete("office", confirm)
+    assert (folder / "office_20261103-111200.jpg").exists()
+
+
+async def test_delete_result_names_config_entry_and_secrets_file(env):
+    cfg, secrets_dir, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    await mgr.add("garage", "10.0.0.5", prompt_with(Credentials(USER, PASSWORD)))
+    (registry.folder("garage") / "garage_20261103-111200.jpg").write_bytes(b"x")
+
+    result = await mgr.delete("garage", choosing(0))
+
+    assert result == (
+        f"deleted 'garage': 1 file, the [cameras.garage] section of {cfg}, "
+        f"{secrets_dir / 'garage.env'}"
+    )
+
+
+async def test_delete_result_counts_files_written_while_waiting(env):
+    cfg, _, _ = env
+    mgr, registry, _ = make_manager(cfg)
+    folder = registry.folder("office")
+
+    async def capture():
+        async with registry.lock("office"):
+            await asyncio.sleep(0.05)
+            (folder / "office_20261103-111300.jpg").write_bytes(b"jpg")
+
+    task = asyncio.create_task(capture())
+    await asyncio.sleep(0)
+    result = await mgr.delete("office", choosing(0))
+    await task
+    assert result.startswith("deleted 'office': 1 file,")
+
+
+async def test_delete_result_does_not_count_symlinks_or_leftovers(env, tmp_path, monkeypatch):
+    cfg, _, _ = env
+    folder = removed_folder(cfg, "zzzzzzzz", "garage")
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"x")
+    (folder / "link.jpg").symlink_to(outside)
+    mgr, _, _ = make_manager(cfg)
+    assert await mgr.delete("garage", choosing(0)) == "deleted 'garage': 1 file"
+    assert outside.exists()
+
+    folder = removed_folder(cfg, "yyyyyyyy", "shed")
+    stuck = folder / "shed_20250101-000000.jpg"
+    monkeypatch.setattr(store, "delete_folder", lambda media, uid: [stuck])
+    result = await mgr.delete("shed", choosing(0))
+    assert result.startswith("deleted 'shed': 0 files; could not delete")
+
+
+async def test_read_only_config_failure_logs_no_rollback(env, caplog):
+    cfg, _, _ = env
+    mgr, _, _ = make_manager(cfg)
+    cfg.chmod(0o444)
+    with (
+        caplog.at_level("ERROR", logger="ipcam_mcp"),
+        pytest.raises(ConfigError, match="read-only"),
+    ):
+        await mgr.remove("office")
+    assert "rollback" not in caplog.text
 
 
 async def test_delete_identical_targets_get_distinct_labels(env):
